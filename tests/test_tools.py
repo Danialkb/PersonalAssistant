@@ -1,6 +1,9 @@
+from typing import Any
+
 from jira.jira_client import JiraIssue
 from jira.settings import Settings
-from jira.tools import format_jira_issues, get_jira_tasks
+
+from jira.tools import format_jira_issues, get_jira_tasks, update_jira_issue_fields
 
 
 def test_format_jira_issues() -> None:
@@ -68,3 +71,75 @@ def test_get_jira_tasks_filters_by_configured_account(monkeypatch) -> None:
     get_jira_tasks(settings)
 
     assert captured["jql"] == 'assignee = "abc123" ORDER BY updated DESC'
+
+
+def test_update_jira_issue_fields_maps_description_add_to_append(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class StubJiraClient:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        def append_description(self, issue_key: str, text: str) -> None:
+            captured["append_description"] = {"issue_key": issue_key, "text": text}
+
+        def update_issue_fields(self, issue_key: str, fields: dict[str, Any]) -> None:
+            captured["update_issue_fields"] = {"issue_key": issue_key, "fields": fields}
+
+    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net",
+        JIRA_API_KEY="token",
+        JIRA_PROJECT_KEY="CCO",
+    )
+
+    output = update_jira_issue_fields(
+        settings,
+        issue_key="2288",
+        fields={"description_add": "websocket route = nchan/sub/1/pdf_signatures"},
+    )
+
+    assert output == "CCO-2288: обновлены поля description."
+    assert captured == {
+        "append_description": {
+            "issue_key": "CCO-2288",
+            "text": "websocket route = nchan/sub/1/pdf_signatures",
+        }
+    }
+
+
+def test_update_jira_issue_fields_maps_string_description_to_append(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class StubJiraClient:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        def append_description(self, issue_key: str, text: str) -> None:
+            captured["append_description"] = {"issue_key": issue_key, "text": text}
+
+        def update_issue_fields(self, issue_key: str, fields: dict[str, Any]) -> None:
+            captured["update_issue_fields"] = {"issue_key": issue_key, "fields": fields}
+
+    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net",
+        JIRA_API_KEY="token",
+        JIRA_PROJECT_KEY="CCO",
+    )
+
+    output = update_jira_issue_fields(
+        settings,
+        issue_key="2288",
+        fields={"description": "Добавить websocket route = nchan/sub/1/pdf_signatures"},
+    )
+
+    assert output == "CCO-2288: обновлены поля description."
+    assert captured == {
+        "append_description": {
+            "issue_key": "CCO-2288",
+            "text": "Добавить websocket route = nchan/sub/1/pdf_signatures",
+        }
+    }

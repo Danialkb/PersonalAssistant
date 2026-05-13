@@ -15,46 +15,51 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    jira_base_url: str = Field(
+    JIRA_BASE_URL: str = Field(
         ...,
         validation_alias=AliasChoices("JIRA_BASE_URL", "JIRA_URL", "JIRA_HOST"),
         description="Atlassian site URL, for example https://company.atlassian.net",
     )
-    jira_email: str | None = Field(
+    JIRA_EMAIL: str | None = Field(
         default=None,
         validation_alias=AliasChoices("JIRA_EMAIL", "JIRA_USER", "JIRA_USERNAME"),
         description="Jira account email for Cloud API token auth",
     )
-    jira_api_key: str = Field(
+    JIRA_API_KEY: str = Field(
         ...,
         validation_alias=AliasChoices("JIRA_API_KEY", "JIRA_API_TOKEN", "JIRA_TOKEN"),
         description="Jira API token or personal access token",
     )
-    jira_auth_mode: str = Field(
+    JIRA_AUTH_MODE: str = Field(
         default="auto",
         validation_alias=AliasChoices("JIRA_AUTH_MODE"),
         description="auto, basic, or bearer",
     )
-    jira_assignee: str | None = Field(
+    JIRA_ASSIGNEE: str | None = Field(
         default=None,
         validation_alias=AliasChoices("JIRA_ASSIGNEE", "JIRA_ACCOUNT_ID", "JIRA_ASSIGNEE_ACCOUNT_ID"),
         description="Jira assignee value for the default task filter. Defaults to currentUser().",
     )
-    jira_default_jql: str | None = Field(
+    JIRA_DEFAULT_JQL: str | None = Field(
         default=None,
         validation_alias=AliasChoices("JIRA_DEFAULT_JQL"),
         description="Full default Jira JQL. Overrides JIRA_ASSIGNEE when provided.",
     )
+    JIRA_PROJECT_KEY: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("JIRA_PROJECT_KEY", "JIRA_PROJECT"),
+        description="Default Jira project key used to resolve bare issue numbers, for example CCO.",
+    )
 
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-4.1-mini"
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-4.1-mini"
 
     @property
     def default_jira_jql(self) -> str:
-        if self.jira_default_jql:
-            return self.jira_default_jql
+        if self.JIRA_DEFAULT_JQL:
+            return self.JIRA_DEFAULT_JQL
 
-        assignee = self.jira_assignee.strip() if self.jira_assignee else "currentUser()"
+        assignee = self.JIRA_ASSIGNEE.strip() if self.JIRA_ASSIGNEE else "currentUser()"
         if assignee.endswith("()"):
             assignee_value = assignee
         else:

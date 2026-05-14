@@ -3,7 +3,7 @@ from typing import Any
 from jira.jira_client import JiraIssue
 from jira.settings import Settings
 
-from jira.tools import format_jira_issues, get_jira_tasks, update_jira_issue_fields
+from jira.tools import create_jira_issue, format_jira_issues, get_jira_tasks, update_jira_issue_fields
 
 
 def test_format_jira_issues() -> None:
@@ -142,4 +142,43 @@ def test_update_jira_issue_fields_maps_string_description_to_append(monkeypatch)
             "issue_key": "CCO-2288",
             "text": "Добавить websocket route = nchan/sub/1/pdf_signatures",
         }
+    }
+
+
+def test_create_jira_issue_uses_parent_project_key(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class StubJiraClient:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        def create_issue(self, **kwargs: Any) -> JiraIssue:
+            captured.update(kwargs)
+            return JiraIssue(
+                key="CCO-2000",
+                summary=kwargs["summary"],
+                status="To Do",
+                priority=None,
+                assignee=None,
+                url="https://example.atlassian.net/browse/CCO-2000",
+            )
+
+    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+
+    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+
+    issue = create_jira_issue(
+        settings,
+        summary="Добавить DocumentUploads в просмотре документов",
+        issue_type="Task",
+        parent_key="CCO-1914",
+    )
+
+    assert issue.key == "CCO-2000"
+    assert captured == {
+        "project_key": "CCO",
+        "summary": "Добавить DocumentUploads в просмотре документов",
+        "issue_type": "Task",
+        "description": None,
+        "parent_key": "CCO-1914",
     }

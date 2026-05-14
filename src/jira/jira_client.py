@@ -67,6 +67,35 @@ class JiraClient:
         self._raise_for_status(response)
         return self._parse_issue(response.json())
 
+    def create_issue(
+        self,
+        *,
+        project_key: str,
+        summary: str,
+        issue_type: str,
+        description: str | None = None,
+        parent_key: str | None = None,
+    ) -> JiraIssue:
+        fields: dict[str, Any] = {
+            "project": {"key": project_key},
+            "summary": summary,
+            "issuetype": {"name": issue_type},
+        }
+        if description:
+            fields["description"] = self._adf_from_text(description)
+        if parent_key:
+            fields["parent"] = {"key": parent_key}
+
+        response = httpx.post(
+            f"{self._base_url}/rest/api/3/issue",
+            json={"fields": fields},
+            auth=self._auth(),
+            headers=self._json_headers(),
+            timeout=20,
+        )
+        self._raise_for_status(response)
+        return self.get_issue(response.json()["key"])
+
     def get_issue_description(self, issue_key: str) -> dict[str, Any] | None:
         response = httpx.get(
             f"{self._base_url}/rest/api/3/issue/{issue_key}",

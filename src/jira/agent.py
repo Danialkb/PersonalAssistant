@@ -29,21 +29,30 @@ PLANNER_INSTRUCTIONS = (
     "Choose answer for non-Jira small talk or when you need clarification. "
     "Choose search for read-only requests like daily overview, blockers, stale tasks, bugs, priority lists. "
     "Choose get_issue when the user asks to inspect, explain, summarize, or open one issue. "
+    "Choose create_issue when the user asks to create a new Jira issue, task, sub-task, or child task. "
     "Choose transition for status changes. Choose comment for adding Jira comments. "
     "Choose update_fields for priority, assignee, labels, due date, summary, or other field updates. "
     "When the user asks to add or append information to an issue description, use fields.description_add. "
     "Use fields.description only when the user explicitly asks to replace the whole description. "
     "For generic personal task searches, do not set jql; the app will use the configured default. "
     "For filtered searches, keep assignee = currentUser() unless the user explicitly asks otherwise. "
+    "For create_issue, fill summary, description when available, issue_type, and parent_key when requested. "
+    "If the user says a task is inside a story or parent task, set parent_key to that issue and issue_type to Sub-task. "
     "For writes, set needs_confirmation=true and fill issue_key plus the field needed for that action. "
-    "If a write request does not identify an issue, choose answer and ask the user which issue to change."
+    "If a write request does not identify an issue but context has Current issue, use that issue_key. "
+    "Use Recent conversation to resolve short replies like 'давай', 'yes', or 'сделай так'. "
+    "If there is no Current issue, choose answer and ask the user which issue to change."
 )
 
 
 class JiraCommand(BaseModel):
-    action: Literal["answer", "search", "get_issue", "transition", "comment", "update_fields"] = "answer"
+    action: Literal["answer", "search", "get_issue", "create_issue", "transition", "comment", "update_fields"] = "answer"
     message: str = ""
     issue_key: str | None = None
+    parent_key: str | None = None
+    issue_type: str | None = None
+    summary: str | None = None
+    description: str | None = None
     jql: str | None = None
     limit: int = Field(default=5, ge=1, le=50)
     transition: str | None = None
@@ -53,7 +62,7 @@ class JiraCommand(BaseModel):
 
     @property
     def is_write(self) -> bool:
-        return self.action in {"transition", "comment", "update_fields"}
+        return self.action in {"create_issue", "transition", "comment", "update_fields"}
 
 
 def get_jira_tasks(ctx: RunContext[Settings], limit: int = 10, jql: str | None = None) -> str:

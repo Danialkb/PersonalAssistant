@@ -10,6 +10,7 @@ from jira.agent import AssistantAgent, JiraCommand
 from jira.settings import get_settings
 from jira.tools import (
     add_jira_comment,
+    create_jira_issue,
     format_jira_issue,
     format_jira_issues,
     get_jira_issue,
@@ -39,6 +40,7 @@ class ChatSession:
         self._confirm = confirm or self._confirm_in_terminal
         self._last_issue_keys: list[str] = []
         self._current_issue_key: str | None = None
+        self._recent_turns: list[tuple[str, str]] = []
 
     def run(self, initial_prompt: str | None = None) -> None:
         print("Jira chat. /exit чтобы выйти, /clear чтобы очистить контекст.")
@@ -57,13 +59,16 @@ class ChatSession:
             if prompt == "/clear":
                 self._last_issue_keys.clear()
                 self._current_issue_key = None
+                self._recent_turns.clear()
                 print("Контекст очищен.")
                 continue
             self._print_handled(prompt)
 
     def handle(self, prompt: str) -> str:
         command = self._agent.plan_command(prompt, context=self._context_summary())
-        return self._execute(command, fallback_prompt=prompt)
+        output = self._execute(command, fallback_prompt=prompt)
+        self._remember_turn(prompt, output)
+        return output
 
     def _print_handled(self, prompt: str) -> None:
         try:
@@ -100,9 +105,13 @@ class ChatSession:
         return command.message or "Не понял команду. Попробуй сформулировать иначе."
 
     def _execute_write(self, command: JiraCommand) -> str:
+        if command.action == "create_issue":
+            return self._create_issue(command)
+
         issue_key = self._resolve_issue_key(command.issue_key)
         if not issue_key:
             return "Для изменения Jira нужно указать задачу, например PA-12."
+        self._current_issue_key = issue_key
 
         preview = self._preview_write(command, issue_key)
         if not self._confirm(preview):
@@ -123,6 +132,27 @@ class ChatSession:
 
         return "Эта write-команда пока не поддержана."
 
+    def _create_issue(self, command: JiraCommand) -> str:
+        if not command.summary:
+            return "Для создания Jira-задачи нужно указать название."
+
+        parent_key = self._resolve_issue_key(command.parent_key) if command.parent_key else None
+        issue_type = self._create_issue_type(command.issue_type, parent_key=parent_key)
+        preview = self._preview_create_issue(command, issue_type=issue_type, parent_key=parent_key)
+        if not self._confirm(preview):
+            return "Изменение отменено."
+
+        issue = create_jira_issue(
+            self._settings,
+            summary=command.summary,
+            issue_type=issue_type,
+            description=command.description,
+            parent_key=parent_key,
+        )
+        self._current_issue_key = issue.key
+        self._last_issue_keys = [issue.key]
+        return f"{issue.key}: задача создана.\n{issue.url}"
+
     def _preview_write(self, command: JiraCommand, issue_key: str) -> str:
         if command.action == "transition":
             return f"Изменить статус {issue_key}: {command.transition}"
@@ -130,6 +160,24 @@ class ChatSession:
             return f"Добавить комментарий в {issue_key}:\n{command.comment}"
         fields = ", ".join(f"{key}={value!r}" for key, value in command.fields.items())
         return f"Обновить поля {issue_key}: {fields}"
+
+    def _preview_create_issue(self, command: JiraCommand, *, issue_type: str, parent_key: str | None) -> str:
+        lines = [
+            f"Создать Jira-задачу: {command.summary}",
+            f"Тип: {issue_type}",
+        ]
+        if parent_key:
+            lines.append(f"Родитель: {parent_key}")
+        if command.description:
+            lines.append(f"Описание:\n{command.description}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _create_issue_type(issue_type: str | None, *, parent_key: str | None) -> str:
+        normalized = (issue_type or "").strip().lower()
+        if parent_key and normalized in {"", "task", "задача"}:
+            return "Sub-task"
+        return issue_type or "Task"
 
     def _resolve_issue_key(self, value: str | None) -> str | None:
         if not value:
@@ -150,7 +198,24 @@ class ChatSession:
             parts.append(f"Current issue: {self._current_issue_key}")
         if self._last_issue_keys:
             parts.append(f"Last search results: {', '.join(self._last_issue_keys)}")
+        if self._recent_turns:
+            lines = ["Recent conversation:"]
+            for user_text, assistant_text in self._recent_turns:
+                lines.append(f"User: {self._compact_context_text(user_text)}")
+                lines.append(f"Assistant: {self._compact_context_text(assistant_text)}")
+            parts.append("\n".join(lines))
         return "\n".join(parts)
+
+    def _remember_turn(self, prompt: str, output: str) -> None:
+        self._recent_turns.append((prompt, output))
+        self._recent_turns = self._recent_turns[-6:]
+
+    @staticmethod
+    def _compact_context_text(text: str, *, limit: int = 500) -> str:
+        compacted = " ".join(text.split())
+        if len(compacted) <= limit:
+            return compacted
+        return compacted[: limit - 3].rstrip() + "..."
 
     @staticmethod
     def _confirm_in_terminal(preview: str) -> bool:

@@ -86,6 +86,30 @@ def test_chat_session_resolves_bare_issue_number_with_project_key(monkeypatch) -
     assert captured["transition_name"] == "Code Review"
 
 
+def test_chat_session_remembers_issue_after_failed_write(monkeypatch) -> None:
+    def fake_transition(*args: Any, **kwargs: Any) -> str:
+        raise ValueError("Transition is not available")
+
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net",
+        JIRA_API_KEY="token",
+        JIRA_PROJECT_KEY="CCO",
+    )
+    session = ChatSession(
+        StubAgent(JiraCommand(action="transition", issue_key="2321", transition="Ready for Testing")),
+        settings,
+        confirm=lambda preview: True,
+    )
+    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+
+    try:
+        session.handle("закинь 2321 в ready for testing")
+    except ValueError:
+        pass
+
+    assert session._context_summary() == "Current issue: CCO-2321"
+
+
 def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
     class StubSettings:
         JIRA_PROJECT_KEY = "CCO"
@@ -188,3 +212,106 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch
     assert output == "commented"
     assert captured["issue_key"] == "PA-1"
     assert captured["text"] == "беру в работу"
+
+
+def test_chat_session_passes_recent_conversation_to_planner() -> None:
+    class CapturingAgent:
+        def __init__(self) -> None:
+            self.contexts: list[str] = []
+
+        def plan_command(self, prompt: str, *, context: str = "") -> JiraCommand:
+            self.contexts.append(context)
+            if prompt == "давай":
+                return JiraCommand(action="answer", message="готово")
+            return JiraCommand(action="answer", message="Нужно уточнение")
+
+        def handle_text(self, text: str) -> str:
+            return "fallback"
+
+    agent = CapturingAgent()
+    session = ChatSession(
+        agent,
+        Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
+    )
+
+    assert session.handle("создай задачу внутри CCO-1914") == "Нужно уточнение"
+    assert session.handle("давай") == "готово"
+
+    assert "User: создай задачу внутри CCO-1914" in agent.contexts[1]
+    assert "Assistant: Нужно уточнение" in agent.contexts[1]
+
+
+def test_chat_session_creates_child_issue(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_create_issue(*args: Any, **kwargs: Any) -> JiraIssue:
+        captured.update(kwargs)
+        return JiraIssue(
+            key="CCO-2000",
+            summary=kwargs["summary"],
+            status="To Do",
+            priority=None,
+            assignee=None,
+            url="https://example.atlassian.net/browse/CCO-2000",
+        )
+
+    monkeypatch.setattr("jira.cli.create_jira_issue", fake_create_issue)
+
+    session = ChatSession(
+        StubAgent(
+            JiraCommand(
+                action="create_issue",
+                parent_key="CCO-1914",
+                summary="Добавить DocumentUploads в просмотре документов",
+                description="Нужно добавить DocumentUploads в просмотре документов.",
+                issue_type="Task",
+            )
+        ),
+        Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
+        confirm=lambda preview: True,
+    )
+
+    output = session.handle("создай задачу внутри истории 1914")
+
+    assert output == "CCO-2000: задача создана.\nhttps://example.atlassian.net/browse/CCO-2000"
+    assert captured == {
+        "summary": "Добавить DocumentUploads в просмотре документов",
+        "issue_type": "Sub-task",
+        "description": "Нужно добавить DocumentUploads в просмотре документов.",
+        "parent_key": "CCO-1914",
+    }
+    assert session._context_summary().startswith("Current issue: CCO-2000")
+
+
+def test_chat_session_keeps_explicit_child_issue_type(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_create_issue(*args: Any, **kwargs: Any) -> JiraIssue:
+        captured.update(kwargs)
+        return JiraIssue(
+            key="CCO-2001",
+            summary=kwargs["summary"],
+            status="To Do",
+            priority=None,
+            assignee=None,
+            url="https://example.atlassian.net/browse/CCO-2001",
+        )
+
+    monkeypatch.setattr("jira.cli.create_jira_issue", fake_create_issue)
+
+    session = ChatSession(
+        StubAgent(
+            JiraCommand(
+                action="create_issue",
+                parent_key="CCO-1914",
+                summary="Добавить DocumentUploads в просмотре документов",
+                issue_type="Sub-task",
+            )
+        ),
+        Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
+        confirm=lambda preview: True,
+    )
+
+    session.handle("создай подзадачу внутри истории 1914")
+
+    assert captured["issue_type"] == "Sub-task"

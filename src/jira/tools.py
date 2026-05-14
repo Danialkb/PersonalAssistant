@@ -88,6 +88,32 @@ def get_jira_issue(settings: Settings, *, issue_key: str) -> JiraIssue:
     return JiraClient(settings).get_issue(issue_key)
 
 
+def create_jira_issue(
+    settings: Settings,
+    *,
+    summary: str,
+    issue_type: str = "Task",
+    description: str | None = None,
+    parent_key: str | None = None,
+    project_key: str | None = None,
+) -> JiraIssue:
+    if parent_key:
+        parent_key = resolve_jira_issue_key(settings, parent_key)
+    resolved_project_key = project_key or settings.JIRA_PROJECT_KEY
+    if not resolved_project_key and parent_key and "-" in parent_key:
+        resolved_project_key = parent_key.split("-", 1)[0]
+    if not resolved_project_key:
+        raise ValueError("JIRA_PROJECT_KEY is required to create a Jira issue without a parent key")
+
+    return JiraClient(settings).create_issue(
+        project_key=resolved_project_key,
+        summary=summary,
+        issue_type=issue_type,
+        description=description,
+        parent_key=parent_key,
+    )
+
+
 def get_jira_transitions(settings: Settings, *, issue_key: str) -> list[JiraTransition]:
     issue_key = resolve_jira_issue_key(settings, issue_key)
     return JiraClient(settings).get_transitions(issue_key)

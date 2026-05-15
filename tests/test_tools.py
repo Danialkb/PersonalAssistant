@@ -3,7 +3,13 @@ from typing import Any
 from jira.jira_client import JiraIssue
 from jira.settings import Settings
 
-from jira.tools import create_jira_issue, format_jira_issues, get_jira_tasks, update_jira_issue_fields
+from jira.tools import (
+    combine_jql_with_updated_today,
+    create_jira_issue,
+    format_jira_issues,
+    get_jira_tasks,
+    update_jira_issue_fields,
+)
 
 
 def test_format_jira_issues() -> None:
@@ -23,6 +29,12 @@ def test_format_jira_issues() -> None:
     assert "PA-1: Add Jira task fetching" in output
     assert "To Do" in output
     assert "https://example.atlassian.net/browse/PA-1" in output
+
+
+def test_combine_jql_with_updated_today_keeps_assignee_and_replaces_order() -> None:
+    output = combine_jql_with_updated_today("assignee = currentUser() ORDER BY priority DESC")
+
+    assert output == "(assignee = currentUser()) AND (updated >= startOfDay()) ORDER BY updated DESC"
 
 
 def test_get_jira_tasks_filters_by_current_user_by_default(monkeypatch) -> None:

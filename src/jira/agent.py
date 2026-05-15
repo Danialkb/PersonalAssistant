@@ -27,6 +27,8 @@ PLANNER_INSTRUCTIONS = (
     "You convert a user's terminal request into one Jira command. "
     "Return only structured output. Use Russian messages when the user writes Russian. "
     "Choose answer for non-Jira small talk or when you need clarification. "
+    "Choose analyze_productivity when the user asks to analyze personal productivity, today's performance, "
+    "what they accomplished today, or how their work day is going; set limit=20 unless the user asks otherwise. "
     "Choose search for read-only requests like daily overview, blockers, stale tasks, bugs, priority lists. "
     "Choose get_issue when the user asks to inspect, explain, summarize, or open one issue. "
     "Choose create_issue when the user asks to create a new Jira issue, task, sub-task, or child task. "
@@ -46,7 +48,16 @@ PLANNER_INSTRUCTIONS = (
 
 
 class JiraCommand(BaseModel):
-    action: Literal["answer", "search", "get_issue", "create_issue", "transition", "comment", "update_fields"] = "answer"
+    action: Literal[
+        "answer",
+        "search",
+        "analyze_productivity",
+        "get_issue",
+        "create_issue",
+        "transition",
+        "comment",
+        "update_fields",
+    ] = "answer"
     message: str = ""
     issue_key: str | None = None
     parent_key: str | None = None
@@ -131,6 +142,8 @@ class AssistantAgent:
 
     def _plan_locally(self, text: str) -> JiraCommand:
         normalized = text.lower()
+        if any(token in normalized for token in ("производитель", "продуктив", "performance", "productivity")):
+            return JiraCommand(action="analyze_productivity", limit=20)
         if "comment" in normalized or "коммент" in normalized or "комментар" in normalized:
             return JiraCommand(action="answer", message="Для комментариев нужен OPENAI_API_KEY, чтобы безопасно разобрать команду.")
         if "status" in normalized or "статус" in normalized or "переведи" in normalized:

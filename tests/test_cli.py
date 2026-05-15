@@ -1,6 +1,6 @@
 from typing import Any
 
-from jira.agent import JiraCommand
+from jira.agent import AssistantAgent, JiraCommand
 from jira.cli import ChatSession, main
 from jira.jira_client import JiraIssue
 from jira.settings import Settings
@@ -212,6 +212,59 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch
     assert output == "commented"
     assert captured["issue_key"] == "PA-1"
     assert captured["text"] == "беру в работу"
+
+
+def test_chat_session_analyzes_productivity_without_table_output(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_search(*args: Any, **kwargs: Any) -> list[JiraIssue]:
+        captured.update(kwargs)
+        return [
+            JiraIssue(
+                key="PA-1",
+                summary="Ship report",
+                status="Done",
+                priority="High",
+                assignee="Oleg",
+                url="https://example.atlassian.net/browse/PA-1",
+            ),
+            JiraIssue(
+                key="PA-2",
+                summary="Review API changes",
+                status="In Progress",
+                priority=None,
+                assignee="Oleg",
+                url="https://example.atlassian.net/browse/PA-2",
+            ),
+        ]
+
+    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    session = ChatSession(
+        StubAgent(JiraCommand(action="analyze_productivity", limit=20)),
+        settings,
+    )
+    monkeypatch.setattr("jira.cli.search_jira_issues", fake_search)
+
+    output = session.handle("проанализируй мою производительность за сегодня")
+
+    assert captured == {
+        "jql": "(assignee = currentUser()) AND (updated >= startOfDay()) ORDER BY updated DESC",
+        "limit": 20,
+    }
+    assert session._last_output_issues is None
+    assert "Анализ производительности за сегодня" in output
+    assert "Затронуто задач: 2" in output
+    assert "Завершено: PA-1 (Done)" in output
+    assert "Фокус на высоком приоритете: PA-1 (Done)" in output
+
+
+def test_local_planner_recognizes_productivity_request() -> None:
+    agent = AssistantAgent(Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"))
+
+    command = agent.plan_command("проанализируй мою производительность за сегодня")
+
+    assert command.action == "analyze_productivity"
+    assert command.limit == 20
 
 
 def test_chat_session_passes_recent_conversation_to_planner() -> None:

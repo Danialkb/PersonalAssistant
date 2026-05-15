@@ -1492,6 +1492,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
+    { name = "rich" },
 ]
 
 [package.dev-dependencies]
@@ -1504,6 +1505,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "pydantic-ai", specifier = ">=1.94.0" },
     { name = "pydantic-settings", specifier = ">=2.9.0" },
+    { name = "rich", specifier = ">=13.9.0" },
 ]
 
 [package.metadata.requires-dev]

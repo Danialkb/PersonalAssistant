@@ -1,5 +1,6 @@
 import argparse
 import sys
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -7,9 +8,11 @@ import httpx
 from pydantic import ValidationError
 
 from jira.agent import AssistantAgent, JiraCommand
+from jira.jira_client import JiraIssue
 from jira.settings import get_settings
 from jira.tools import (
     add_jira_comment,
+    combine_jql_with_updated_today,
     create_jira_issue,
     format_jira_issue,
     format_jira_issues,
@@ -19,6 +22,7 @@ from jira.tools import (
     transition_jira_issue,
     update_jira_issue_fields,
 )
+from jira.ui import TerminalUI
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,23 +38,26 @@ class ChatSession:
         settings,
         *,
         confirm: Callable[[str], bool] | None = None,
+        ui: TerminalUI | None = None,
     ) -> None:
         self._agent = agent
         self._settings = settings
-        self._confirm = confirm or self._confirm_in_terminal
+        self._ui = ui or TerminalUI()
+        self._confirm = confirm or self._ui.confirm
         self._last_issue_keys: list[str] = []
         self._current_issue_key: str | None = None
         self._recent_turns: list[tuple[str, str]] = []
+        self._last_output_issues: list[JiraIssue] | None = None
 
     def run(self, initial_prompt: str | None = None) -> None:
-        print("Jira chat. /exit чтобы выйти, /clear чтобы очистить контекст.")
+        self._ui.print_banner()
         if initial_prompt:
-            self._print_handled(initial_prompt)
+            self.print_handled(initial_prompt)
         while True:
             try:
                 prompt = input("> ").strip()
             except (EOFError, KeyboardInterrupt):
-                print()
+                self._ui.console.print()
                 return
             if not prompt:
                 continue
@@ -60,21 +67,26 @@ class ChatSession:
                 self._last_issue_keys.clear()
                 self._current_issue_key = None
                 self._recent_turns.clear()
-                print("Контекст очищен.")
+                self._ui.print_success("Контекст очищен.")
                 continue
-            self._print_handled(prompt)
+            self.print_handled(prompt)
 
     def handle(self, prompt: str) -> str:
+        self._last_output_issues = None
         command = self._agent.plan_command(prompt, context=self._context_summary())
         output = self._execute(command, fallback_prompt=prompt)
         self._remember_turn(prompt, output)
         return output
 
-    def _print_handled(self, prompt: str) -> None:
+    def print_handled(self, prompt: str) -> None:
         try:
-            print(self.handle(prompt))
+            output = self.handle(prompt)
+            if self._last_output_issues is not None:
+                self._ui.print_issues_table(self._last_output_issues)
+            else:
+                self._ui.print_assistant(output)
         except (httpx.HTTPStatusError, ValueError) as exc:
-            print(f"Ошибка: {exc}")
+            self._ui.print_error(str(exc))
 
     def _execute(self, command: JiraCommand, *, fallback_prompt: str) -> str:
         if command.action == "answer":
@@ -87,9 +99,18 @@ class ChatSession:
                 limit=command.limit,
             )
             self._last_issue_keys = [issue.key for issue in issues]
+            self._last_output_issues = issues
             if issues:
                 self._current_issue_key = issues[0].key
             return format_jira_issues(issues)
+
+        if command.action == "analyze_productivity":
+            jql = command.jql or combine_jql_with_updated_today(self._settings.default_jira_jql)
+            issues = search_jira_issues(self._settings, jql=jql, limit=command.limit)
+            self._last_issue_keys = [issue.key for issue in issues]
+            if issues:
+                self._current_issue_key = issues[0].key
+            return self._format_productivity_analysis(issues)
 
         if command.action == "get_issue":
             issue_key = self._resolve_issue_key(command.issue_key)
@@ -208,7 +229,7 @@ class ChatSession:
 
     def _remember_turn(self, prompt: str, output: str) -> None:
         self._recent_turns.append((prompt, output))
-        self._recent_turns = self._recent_turns[-6:]
+        self._recent_turns = self._recent_turns[-10:]
 
     @staticmethod
     def _compact_context_text(text: str, *, limit: int = 500) -> str:
@@ -218,11 +239,73 @@ class ChatSession:
         return compacted[: limit - 3].rstrip() + "..."
 
     @staticmethod
-    def _confirm_in_terminal(preview: str) -> bool:
-        print(preview)
-        answer = input("Apply? [y/N] ").strip().lower()
-        return answer in {"y", "yes", "д", "да"}
+    def _format_productivity_analysis(issues: list[JiraIssue]) -> str:
+        if not issues:
+            return (
+                "За сегодня в Jira не нашлось обновленных задач по твоему фильтру. "
+                "По этим данным нельзя подтвердить активность; стоит проверить worklog, календарь или коммиты, "
+                "если работа не отражалась обновлениями задач."
+            )
 
+        status_counts = Counter(issue.status for issue in issues)
+        completed = [issue for issue in issues if ChatSession._is_completed_status(issue.status)]
+        active = [issue for issue in issues if ChatSession._is_active_status(issue.status)]
+        blocked = [issue for issue in issues if ChatSession._is_blocked_status(issue.status)]
+        high_priority = [
+            issue for issue in issues if (issue.priority or "").strip().lower() in {"highest", "high", "высокий", "критический"}
+        ]
+
+        lines = [
+            "Анализ производительности за сегодня по Jira:",
+            f"- Затронуто задач: {len(issues)}.",
+            f"- Статусы: {ChatSession._format_counts(status_counts)}.",
+        ]
+        if completed:
+            lines.append(f"- Завершено: {ChatSession._format_issue_refs(completed)}.")
+        if active:
+            lines.append(f"- В активной работе или на проверке: {ChatSession._format_issue_refs(active)}.")
+        if high_priority:
+            lines.append(f"- Фокус на высоком приоритете: {ChatSession._format_issue_refs(high_priority)}.")
+        if blocked:
+            lines.append(f"- Есть возможные блокеры: {ChatSession._format_issue_refs(blocked)}.")
+
+        if completed and not blocked:
+            lines.append("Вывод: день выглядит продуктивным: есть завершенные задачи и нет явных блокеров в найденных задачах.")
+        elif active and not completed:
+            lines.append("Вывод: день больше похож на продвижение текущей работы, чем на закрытие задач.")
+        elif blocked:
+            lines.append("Вывод: продуктивность может проседать из-за блокеров; их лучше разобрать первыми.")
+        else:
+            lines.append("Вывод: активность есть, но по одним статусам Jira сложно оценить реальный результат.")
+
+        lines.append("Ограничение: анализ основан на задачах, обновленных сегодня, а не на worklog или истории статусов.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_counts(counts: Counter[str]) -> str:
+        return ", ".join(f"{status} - {count}" for status, count in counts.most_common())
+
+    @staticmethod
+    def _format_issue_refs(issues: list[JiraIssue], *, limit: int = 5) -> str:
+        refs = [f"{issue.key} ({issue.status})" for issue in issues[:limit]]
+        if len(issues) > limit:
+            refs.append(f"еще {len(issues) - limit}")
+        return ", ".join(refs)
+
+    @staticmethod
+    def _is_completed_status(status: str) -> bool:
+        normalized = status.strip().lower()
+        return any(token in normalized for token in ("done", "closed", "resolved", "готов", "закрыт", "выполн"))
+
+    @staticmethod
+    def _is_active_status(status: str) -> bool:
+        normalized = status.strip().lower()
+        return any(token in normalized for token in ("progress", "review", "testing", "работ", "ревью", "тест"))
+
+    @staticmethod
+    def _is_blocked_status(status: str) -> bool:
+        normalized = status.strip().lower()
+        return any(token in normalized for token in ("blocked", "blocker", "блок", "заблок"))
 
 def main() -> None:
     parser = build_parser()
@@ -254,6 +337,6 @@ def main() -> None:
         return
 
     try:
-        print(ChatSession(agent, settings).handle(prompt))
+        ChatSession(agent, settings).print_handled(prompt)
     except (httpx.HTTPStatusError, ValueError) as exc:
         parser.exit(1, f"Ошибка: {exc}\n")

@@ -11,6 +11,11 @@ def combine_jql_with_text_search(default_jql: str, search_text: str) -> str:
     return f"({base_jql}) AND ({text_jql}) ORDER BY updated DESC"
 
 
+def combine_jql_with_updated_today(default_jql: str) -> str:
+    base_jql = _strip_order_by(default_jql)
+    return f"({base_jql}) AND (updated >= startOfDay()) ORDER BY updated DESC"
+
+
 def format_jira_issues(issues: list[JiraIssue]) -> str:
     if not issues:
         return "Jira не вернула задач по текущему запросу."

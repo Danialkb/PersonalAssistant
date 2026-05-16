@@ -30,7 +30,11 @@ from personal_assistant.ui import TerminalUI
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Text-first personal assistant CLI.")
-    parser.add_argument("prompt", nargs="*", help="Natural-language command, for example: достань мне задачи в jira")
+    parser.add_argument(
+        "prompt",
+        nargs="*",
+        help="Natural-language command, for example: достань мне задачи в jira",
+    )
     return parser
 
 
@@ -108,7 +112,9 @@ class ChatSession:
             return format_jira_issues(issues)
 
         if command.action == "analyze_productivity":
-            jql = command.jql or combine_jql_with_updated_today(self._settings.default_jira_jql)
+            jql = command.jql or combine_jql_with_updated_today(
+                self._settings.default_jira_jql
+            )
             issues = search_jira_issues(self._settings, jql=jql, limit=command.limit)
             self._last_issue_keys = [issue.key for issue in issues]
             if issues:
@@ -147,11 +153,15 @@ class ChatSession:
         if command.action == "comment":
             if not command.comment:
                 return "Не указан текст комментария."
-            return add_jira_comment(self._settings, issue_key=issue_key, text=command.comment)
+            return add_jira_comment(
+                self._settings, issue_key=issue_key, text=command.comment
+            )
         if command.action == "update_fields":
             if not command.fields:
                 return "Не указаны поля для обновления."
-            return update_jira_issue_fields(self._settings, issue_key=issue_key, fields=command.fields)
+            return update_jira_issue_fields(
+                self._settings, issue_key=issue_key, fields=command.fields
+            )
 
         return "Эта write-команда пока не поддержана."
 
@@ -162,21 +172,29 @@ class ChatSession:
         transitions = get_jira_transitions(self._settings, issue_key=issue_key)
         transition = self._find_transition(transitions, command.transition)
         if not transition:
-            return self._format_unknown_transition(issue_key, command.transition, transitions)
+            return self._format_unknown_transition(
+                issue_key, command.transition, transitions
+            )
 
         preview = self._preview_transition(issue_key, transition)
         if not self._confirm(preview):
             return "Изменение отменено."
 
-        return transition_jira_issue(self._settings, issue_key=issue_key, transition_name=transition.name)
+        return transition_jira_issue(
+            self._settings, issue_key=issue_key, transition_name=transition.name
+        )
 
     def _create_issue(self, command: JiraCommand) -> str:
         if not command.summary:
             return "Для создания Jira-задачи нужно указать название."
 
-        parent_key = self._resolve_issue_key(command.parent_key) if command.parent_key else None
+        parent_key = (
+            self._resolve_issue_key(command.parent_key) if command.parent_key else None
+        )
         issue_type = self._create_issue_type(command.issue_type, parent_key=parent_key)
-        preview = self._preview_create_issue(command, issue_type=issue_type, parent_key=parent_key)
+        preview = self._preview_create_issue(
+            command, issue_type=issue_type, parent_key=parent_key
+        )
         if not self._confirm(preview):
             return "Изменение отменено."
 
@@ -206,10 +224,15 @@ class ChatSession:
         return f"Изменить статус {issue_key}: {transition.name}"
 
     @staticmethod
-    def _find_transition(transitions: list[JiraTransition], requested: str) -> JiraTransition | None:
+    def _find_transition(
+        transitions: list[JiraTransition], requested: str
+    ) -> JiraTransition | None:
         normalized = requested.strip().lower()
         for transition in transitions:
-            if transition.name.lower() == normalized or (transition.target_status or "").lower() == normalized:
+            if (
+                transition.name.lower() == normalized
+                or (transition.target_status or "").lower() == normalized
+            ):
                 return transition
         partial_matches = [
             transition
@@ -227,7 +250,9 @@ class ChatSession:
         return None
 
     @staticmethod
-    def _format_unknown_transition(issue_key: str, requested: str, transitions: list[JiraTransition]) -> str:
+    def _format_unknown_transition(
+        issue_key: str, requested: str, transitions: list[JiraTransition]
+    ) -> str:
         lines = [
             f"Не могу изменить статус {issue_key} на {requested!r}: такого доступного transition/status сейчас нет.",
             "",
@@ -237,7 +262,9 @@ class ChatSession:
         ]
         return "\n".join(lines)
 
-    def _preview_create_issue(self, command: JiraCommand, *, issue_type: str, parent_key: str | None) -> str:
+    def _preview_create_issue(
+        self, command: JiraCommand, *, issue_type: str, parent_key: str | None
+    ) -> str:
         lines = [
             f"Создать Jira-задачу: {command.summary}",
             f"Тип: {issue_type}",
@@ -260,9 +287,15 @@ class ChatSession:
             return self._current_issue_key
 
         normalized = value.strip().lower()
-        if normalized in {"1", "first", "первая", "первую", "первой"} and self._last_issue_keys:
+        if (
+            normalized in {"1", "first", "первая", "первую", "первой"}
+            and self._last_issue_keys
+        ):
             return self._last_issue_keys[0]
-        if normalized in {"2", "second", "вторая", "вторую", "второй"} and len(self._last_issue_keys) > 1:
+        if (
+            normalized in {"2", "second", "вторая", "вторую", "второй"}
+            and len(self._last_issue_keys) > 1
+        ):
             return self._last_issue_keys[1]
         if normalized in {"last", "последняя", "последнюю"} and self._last_issue_keys:
             return self._last_issue_keys[-1]
@@ -303,11 +336,20 @@ class ChatSession:
             )
 
         status_counts = Counter(issue.status for issue in issues)
-        completed = [issue for issue in issues if ChatSession._is_completed_status(issue.status)]
-        active = [issue for issue in issues if ChatSession._is_active_status(issue.status)]
-        blocked = [issue for issue in issues if ChatSession._is_blocked_status(issue.status)]
+        completed = [
+            issue for issue in issues if ChatSession._is_completed_status(issue.status)
+        ]
+        active = [
+            issue for issue in issues if ChatSession._is_active_status(issue.status)
+        ]
+        blocked = [
+            issue for issue in issues if ChatSession._is_blocked_status(issue.status)
+        ]
         high_priority = [
-            issue for issue in issues if (issue.priority or "").strip().lower() in {"highest", "high", "высокий", "критический"}
+            issue
+            for issue in issues
+            if (issue.priority or "").strip().lower()
+            in {"highest", "high", "высокий", "критический"}
         ]
 
         lines = [
@@ -318,27 +360,45 @@ class ChatSession:
         if completed:
             lines.append(f"- Завершено: {ChatSession._format_issue_refs(completed)}.")
         if active:
-            lines.append(f"- В активной работе или на проверке: {ChatSession._format_issue_refs(active)}.")
+            lines.append(
+                f"- В активной работе или на проверке: {ChatSession._format_issue_refs(active)}."
+            )
         if high_priority:
-            lines.append(f"- Фокус на высоком приоритете: {ChatSession._format_issue_refs(high_priority)}.")
+            lines.append(
+                f"- Фокус на высоком приоритете: {ChatSession._format_issue_refs(high_priority)}."
+            )
         if blocked:
-            lines.append(f"- Есть возможные блокеры: {ChatSession._format_issue_refs(blocked)}.")
+            lines.append(
+                f"- Есть возможные блокеры: {ChatSession._format_issue_refs(blocked)}."
+            )
 
         if completed and not blocked:
-            lines.append("Вывод: день выглядит продуктивным: есть завершенные задачи и нет явных блокеров в найденных задачах.")
+            lines.append(
+                "Вывод: день выглядит продуктивным: есть завершенные задачи и нет явных блокеров в найденных задачах."
+            )
         elif active and not completed:
-            lines.append("Вывод: день больше похож на продвижение текущей работы, чем на закрытие задач.")
+            lines.append(
+                "Вывод: день больше похож на продвижение текущей работы, чем на закрытие задач."
+            )
         elif blocked:
-            lines.append("Вывод: продуктивность может проседать из-за блокеров; их лучше разобрать первыми.")
+            lines.append(
+                "Вывод: продуктивность может проседать из-за блокеров; их лучше разобрать первыми."
+            )
         else:
-            lines.append("Вывод: активность есть, но по одним статусам Jira сложно оценить реальный результат.")
+            lines.append(
+                "Вывод: активность есть, но по одним статусам Jira сложно оценить реальный результат."
+            )
 
-        lines.append("Ограничение: анализ основан на задачах, обновленных сегодня, а не на worklog или истории статусов.")
+        lines.append(
+            "Ограничение: анализ основан на задачах, обновленных сегодня, а не на worklog или истории статусов."
+        )
         return "\n".join(lines)
 
     @staticmethod
     def _format_counts(counts: Counter[str]) -> str:
-        return ", ".join(f"{status} - {count}" for status, count in counts.most_common())
+        return ", ".join(
+            f"{status} - {count}" for status, count in counts.most_common()
+        )
 
     @staticmethod
     def _format_issue_refs(issues: list[JiraIssue], *, limit: int = 5) -> str:
@@ -350,17 +410,26 @@ class ChatSession:
     @staticmethod
     def _is_completed_status(status: str) -> bool:
         normalized = status.strip().lower()
-        return any(token in normalized for token in ("done", "closed", "resolved", "готов", "закрыт", "выполн"))
+        return any(
+            token in normalized
+            for token in ("done", "closed", "resolved", "готов", "закрыт", "выполн")
+        )
 
     @staticmethod
     def _is_active_status(status: str) -> bool:
         normalized = status.strip().lower()
-        return any(token in normalized for token in ("progress", "review", "testing", "работ", "ревью", "тест"))
+        return any(
+            token in normalized
+            for token in ("progress", "review", "testing", "работ", "ревью", "тест")
+        )
 
     @staticmethod
     def _is_blocked_status(status: str) -> bool:
         normalized = status.strip().lower()
-        return any(token in normalized for token in ("blocked", "blocker", "блок", "заблок"))
+        return any(
+            token in normalized for token in ("blocked", "blocker", "блок", "заблок")
+        )
+
 
 def main() -> None:
     parser = build_parser()
@@ -372,12 +441,16 @@ def main() -> None:
         if command_name == "assistant":
             prompt = "chat"
         else:
-            parser.error("Передайте текстовую команду, например: jira достань мне задачи в jira")
+            parser.error(
+                "Передайте текстовую команду, например: jira достань мне задачи в jira"
+            )
 
     try:
         settings = get_settings()
     except ValidationError as exc:
-        missing = ", ".join(error["loc"][0] for error in exc.errors() if error["type"] == "missing")
+        missing = ", ".join(
+            error["loc"][0] for error in exc.errors() if error["type"] == "missing"
+        )
         if missing:
             parser.exit(2, f"Не хватает переменных окружения: {missing}\n")
         raise

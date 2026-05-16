@@ -22,7 +22,9 @@ def stub_transitions(*args: Any, **kwargs: Any) -> list[JiraTransition]:
     return [
         JiraTransition(id="11", name="In Progress", target_status="In Progress"),
         JiraTransition(id="21", name="Code Review", target_status="Code Review"),
-        JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+        JiraTransition(
+            id="31", name="Ready for Testing", target_status="Ready for Testing"
+        ),
     ]
 
 
@@ -37,7 +39,11 @@ def test_chat_session_does_not_apply_write_without_confirmation(monkeypatch) -> 
     monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="PA-12", transition="In Progress")),
+        StubAgent(
+            JiraCommand(
+                action="transition", issue_key="PA-12", transition="In Progress"
+            )
+        ),
         Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
         confirm=lambda preview: False,
     )
@@ -59,7 +65,11 @@ def test_chat_session_applies_write_after_confirmation(monkeypatch) -> None:
     monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="PA-12", transition="In Progress")),
+        StubAgent(
+            JiraCommand(
+                action="transition", issue_key="PA-12", transition="In Progress"
+            )
+        ),
         Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
         confirm=lambda preview: True,
     )
@@ -82,7 +92,9 @@ def test_chat_session_resolves_bare_issue_number_with_project_key(monkeypatch) -
     monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="2284", transition="Code Review")),
+        StubAgent(
+            JiraCommand(action="transition", issue_key="2284", transition="Code Review")
+        ),
         Settings(
             JIRA_BASE_URL="https://example.atlassian.net",
             JIRA_API_KEY="token",
@@ -108,7 +120,11 @@ def test_chat_session_remembers_issue_after_failed_write(monkeypatch) -> None:
         JIRA_PROJECT_KEY="CCO",
     )
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="2321", transition="Ready for Testing")),
+        StubAgent(
+            JiraCommand(
+                action="transition", issue_key="2321", transition="Ready for Testing"
+            )
+        ),
         settings,
         confirm=lambda preview: True,
     )
@@ -133,7 +149,9 @@ def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
             pass
 
         def plan_command(self, prompt: str, *, context: str = "") -> JiraCommand:
-            return JiraCommand(action="transition", issue_key="2284", transition="Code Review")
+            return JiraCommand(
+                action="transition", issue_key="2284", transition="Code Review"
+            )
 
         def handle_text(self, text: str) -> str:
             return "fallback"
@@ -144,7 +162,10 @@ def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
         captured.update(kwargs)
         return "CCO-2284: выполнен transition Code Review."
 
-    monkeypatch.setattr("sys.argv", ["jira", "перенеси", "задачу", "2284", "в", "jira", "установи", "Code review"])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["jira", "перенеси", "задачу", "2284", "в", "jira", "установи", "Code review"],
+    )
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
     monkeypatch.setattr("personal_assistant.cli.get_settings", lambda: StubSettings())
     monkeypatch.setattr("personal_assistant.cli.AssistantAgent", StubAssistant)
@@ -159,7 +180,9 @@ def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
     assert captured["issue_key"] == "CCO-2284"
 
 
-def test_chat_session_rejects_unknown_transition_before_confirmation(monkeypatch) -> None:
+def test_chat_session_rejects_unknown_transition_before_confirmation(
+    monkeypatch,
+) -> None:
     called: dict[str, Any] = {}
 
     def fake_confirm(preview: str) -> bool:
@@ -175,12 +198,16 @@ def test_chat_session_rejects_unknown_transition_before_confirmation(monkeypatch
         "personal_assistant.cli.get_jira_transitions",
         lambda *args, **kwargs: [
             JiraTransition(id="21", name="Code Review", target_status="Code Review"),
-            JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+            JiraTransition(
+                id="31", name="Ready for Testing", target_status="Ready for Testing"
+            ),
         ],
     )
 
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="2329", transition="QA Review")),
+        StubAgent(
+            JiraCommand(action="transition", issue_key="2329", transition="QA Review")
+        ),
         Settings(
             JIRA_BASE_URL="https://example.atlassian.net",
             JIRA_API_KEY="token",
@@ -198,7 +225,9 @@ def test_chat_session_rejects_unknown_transition_before_confirmation(monkeypatch
     assert "transition" not in called
 
 
-def test_chat_session_normalizes_partial_transition_to_existing_option(monkeypatch) -> None:
+def test_chat_session_normalizes_partial_transition_to_existing_option(
+    monkeypatch,
+) -> None:
     previews: list[str] = []
     captured: dict[str, Any] = {}
 
@@ -211,12 +240,16 @@ def test_chat_session_normalizes_partial_transition_to_existing_option(monkeypat
         "personal_assistant.cli.get_jira_transitions",
         lambda *args, **kwargs: [
             JiraTransition(id="21", name="Code Review", target_status="Code Review"),
-            JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+            JiraTransition(
+                id="31", name="Ready for Testing", target_status="Ready for Testing"
+            ),
         ],
     )
 
     session = ChatSession(
-        StubAgent(JiraCommand(action="transition", issue_key="2329", transition="Review")),
+        StubAgent(
+            JiraCommand(action="transition", issue_key="2329", transition="Review")
+        ),
         Settings(
             JIRA_BASE_URL="https://example.atlassian.net",
             JIRA_API_KEY="token",
@@ -260,7 +293,9 @@ def test_assistant_prompt_starts_interactive_session(monkeypatch, capsys) -> Non
     assert "ответ: привет" in output
 
 
-def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch) -> None:
+def test_chat_session_search_stores_context_and_resolves_first_issue(
+    monkeypatch,
+) -> None:
     def fake_search(*args: Any, **kwargs: Any) -> list[JiraIssue]:
         return [
             JiraIssue(
@@ -279,7 +314,9 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch
         captured.update(kwargs)
         return "commented"
 
-    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"
+    )
     session = ChatSession(
         StubAgent(JiraCommand(action="search", limit=5)),
         settings,
@@ -291,7 +328,9 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch
 
     assert "PA-1: First" in output
 
-    session._agent = StubAgent(JiraCommand(action="comment", issue_key="первая", comment="беру в работу"))
+    session._agent = StubAgent(
+        JiraCommand(action="comment", issue_key="первая", comment="беру в работу")
+    )
     monkeypatch.setattr("personal_assistant.cli.add_jira_comment", fake_comment)
 
     output = session.handle("напиши в первую")
@@ -325,7 +364,9 @@ def test_chat_session_analyzes_productivity_without_table_output(monkeypatch) ->
             ),
         ]
 
-    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"
+    )
     session = ChatSession(
         StubAgent(JiraCommand(action="analyze_productivity", limit=20)),
         settings,
@@ -346,7 +387,9 @@ def test_chat_session_analyzes_productivity_without_table_output(monkeypatch) ->
 
 
 def test_local_planner_recognizes_productivity_request() -> None:
-    agent = AssistantAgent(Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"))
+    agent = AssistantAgent(
+        Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    )
 
     command = agent.plan_command("проанализируй мою производительность за сегодня")
 
@@ -413,7 +456,10 @@ def test_chat_session_creates_child_issue(monkeypatch) -> None:
 
     output = session.handle("создай задачу внутри истории 1914")
 
-    assert output == "CCO-2000: задача создана.\nhttps://example.atlassian.net/browse/CCO-2000"
+    assert (
+        output
+        == "CCO-2000: задача создана.\nhttps://example.atlassian.net/browse/CCO-2000"
+    )
     assert captured == {
         "summary": "Добавить DocumentUploads в просмотре документов",
         "issue_type": "Sub-task",

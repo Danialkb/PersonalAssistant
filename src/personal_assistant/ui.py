@@ -10,7 +10,12 @@ from personal_assistant.clients.jira import JiraIssue
 
 
 class TerminalUI:
-    def __init__(self, *, console: Console | None = None, input_func: Callable[[str], str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        console: Console | None = None,
+        input_func: Callable[[str], str] | None = None,
+    ) -> None:
         self.console = console or Console()
         self._input = input_func
 
@@ -34,7 +39,9 @@ class TerminalUI:
 
     def print_issues_table(self, issues: list[JiraIssue]) -> None:
         if not issues:
-            self.console.print("[yellow]Jira не вернула задач по текущему запросу.[/yellow]")
+            self.console.print(
+                "[yellow]Jira не вернула задач по текущему запросу.[/yellow]"
+            )
             return
 
         table = Table(title="Задачи из Jira", title_style="bold cyan", show_lines=False)

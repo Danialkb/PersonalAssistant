@@ -148,7 +148,9 @@ class JiraClient(HttpApiClient):
 
     def append_description(self, issue_key: str, text: str) -> None:
         current_description = self.get_issue_description(issue_key)
-        new_description = self._append_adf_content(current_description, self._adf_from_text(text))
+        new_description = self._append_adf_content(
+            current_description, self._adf_from_text(text)
+        )
         self.update_issue_fields(issue_key, {"description": new_description})
 
     def _auth(self) -> httpx.Auth | None:
@@ -157,7 +159,9 @@ class JiraClient(HttpApiClient):
         ):
             if not self._settings.JIRA_EMAIL:
                 raise ValueError("JIRA_EMAIL is required when JIRA_AUTH_MODE=basic")
-            return httpx.BasicAuth(self._settings.JIRA_EMAIL, self._settings.JIRA_API_KEY)
+            return httpx.BasicAuth(
+                self._settings.JIRA_EMAIL, self._settings.JIRA_API_KEY
+            )
         return None
 
     def _headers(self) -> dict[str, str]:
@@ -200,13 +204,20 @@ class JiraClient(HttpApiClient):
         )
 
     @staticmethod
-    def _find_transition(transitions: list[JiraTransition], transition_name: str) -> JiraTransition:
+    def _find_transition(
+        transitions: list[JiraTransition], transition_name: str
+    ) -> JiraTransition:
         normalized = transition_name.strip().lower()
         for transition in transitions:
-            if transition.name.lower() == normalized or (transition.target_status or "").lower() == normalized:
+            if (
+                transition.name.lower() == normalized
+                or (transition.target_status or "").lower() == normalized
+            ):
                 return transition
         available = ", ".join(transition.name for transition in transitions) or "none"
-        raise ValueError(f"Transition '{transition_name}' is not available. Available transitions: {available}")
+        raise ValueError(
+            f"Transition '{transition_name}' is not available. Available transitions: {available}"
+        )
 
     @classmethod
     def _plain_text(cls, value: Any) -> str | None:
@@ -299,7 +310,9 @@ class JiraClient(HttpApiClient):
         return {"type": "paragraph", "content": content}
 
     @staticmethod
-    def _append_adf_content(current: dict[str, Any] | None, addition: dict[str, Any]) -> dict[str, Any]:
+    def _append_adf_content(
+        current: dict[str, Any] | None, addition: dict[str, Any]
+    ) -> dict[str, Any]:
         content: list[dict[str, Any]] = []
         if current and current.get("type") == "doc":
             content.extend(current.get("content") or [])

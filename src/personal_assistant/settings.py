@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     )
     JIRA_ASSIGNEE: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("JIRA_ASSIGNEE", "JIRA_ACCOUNT_ID", "JIRA_ASSIGNEE_ACCOUNT_ID"),
+        validation_alias=AliasChoices(
+            "JIRA_ASSIGNEE", "JIRA_ACCOUNT_ID", "JIRA_ASSIGNEE_ACCOUNT_ID"
+        ),
         description="Jira assignee value for the default task filter. Defaults to currentUser().",
     )
     JIRA_DEFAULT_JQL: str | None = Field(
@@ -49,6 +51,18 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("JIRA_PROJECT_KEY", "JIRA_PROJECT"),
         description="Default Jira project key used to resolve bare issue numbers, for example CCO.",
+    )
+    GITLAB_BASE_URL: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITLAB_BASE_URL", "GITLAB_URL", "GITLAB_HOST"),
+        description="GitLab site URL, for example https://gitlab.com or https://gitlab.company.com",
+    )
+    GITLAB_TOKEN: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GITLAB_TOKEN", "GITLAB_API_TOKEN", "GITLAB_PRIVATE_TOKEN"
+        ),
+        description="GitLab personal, project, or group access token",
     )
 
     OPENAI_API_KEY: str | None = None

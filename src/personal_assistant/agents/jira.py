@@ -74,7 +74,9 @@ class JiraCommand(BaseModel):
         return self.action in {"create_issue", "transition", "comment", "update_fields"}
 
 
-def get_jira_tasks(ctx: RunContext[Settings], limit: int = 10, jql: str | None = None) -> str:
+def get_jira_tasks(
+    ctx: RunContext[Settings], limit: int = 10, jql: str | None = None
+) -> str:
     """Fetch Jira issues for the user.
 
     Use this when the user asks to show, fetch, list, analyze, or prioritize Jira tasks.
@@ -90,7 +92,9 @@ def get_jira_issue(ctx: RunContext[Settings], issue_key: str) -> str:
 
 def get_jira_transitions(ctx: RunContext[Settings], issue_key: str) -> str:
     """Fetch available Jira workflow transitions for one issue."""
-    return format_jira_transitions(fetch_jira_transitions(ctx.deps, issue_key=issue_key))
+    return format_jira_transitions(
+        fetch_jira_transitions(ctx.deps, issue_key=issue_key)
+    )
 
 
 class JiraAgent:
@@ -139,12 +143,25 @@ class JiraAgent:
 
     def _plan_locally(self, text: str) -> JiraCommand:
         normalized = text.lower()
-        if any(token in normalized for token in ("производитель", "продуктив", "performance", "productivity")):
+        if any(
+            token in normalized
+            for token in ("производитель", "продуктив", "performance", "productivity")
+        ):
             return JiraCommand(action="analyze_productivity", limit=20)
-        if "comment" in normalized or "коммент" in normalized or "комментар" in normalized:
-            return JiraCommand(action="answer", message="Для комментариев нужен OPENAI_API_KEY, чтобы безопасно разобрать команду.")
+        if (
+            "comment" in normalized
+            or "коммент" in normalized
+            or "комментар" in normalized
+        ):
+            return JiraCommand(
+                action="answer",
+                message="Для комментариев нужен OPENAI_API_KEY, чтобы безопасно разобрать команду.",
+            )
         if "status" in normalized or "статус" in normalized or "переведи" in normalized:
-            return JiraCommand(action="answer", message="Для изменения статуса нужен OPENAI_API_KEY, чтобы безопасно разобрать команду.")
+            return JiraCommand(
+                action="answer",
+                message="Для изменения статуса нужен OPENAI_API_KEY, чтобы безопасно разобрать команду.",
+            )
         if "jira" in normalized or "джир" in normalized or "задач" in normalized:
             return JiraCommand(action="search", limit=10)
         return JiraCommand(action="answer", message=self._handle_locally(text))

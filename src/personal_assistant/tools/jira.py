@@ -24,7 +24,9 @@ def format_jira_issues(issues: list[JiraIssue]) -> str:
     for issue in issues:
         priority = f", priority: {issue.priority}" if issue.priority else ""
         assignee = f", assignee: {issue.assignee}" if issue.assignee else ""
-        lines.append(f"- {issue.key}: {issue.summary} [{issue.status}{priority}{assignee}]")
+        lines.append(
+            f"- {issue.key}: {issue.summary} [{issue.status}{priority}{assignee}]"
+        )
         lines.append(f"  {issue.url}")
     return "\n".join(lines)
 
@@ -61,12 +63,15 @@ def format_jira_transitions(transitions: list[JiraTransition]) -> str:
     if not transitions:
         return "Для этой задачи нет доступных переходов статуса."
     return "Доступные переходы:\n" + "\n".join(
-        f"- {transition.name}" + (f" -> {transition.target_status}" if transition.target_status else "")
+        f"- {transition.name}"
+        + (f" -> {transition.target_status}" if transition.target_status else "")
         for transition in transitions
     )
 
 
-def get_jira_tasks(settings: Settings, *, limit: int = 5, jql: str | None = None) -> str:
+def get_jira_tasks(
+    settings: Settings, *, limit: int = 5, jql: str | None = None
+) -> str:
     client = JiraClient(settings)
     issues = client.search_issues(jql=jql or settings.default_jira_jql, limit=limit)
     return format_jira_issues(issues)
@@ -84,7 +89,9 @@ def resolve_jira_issue_key(settings: Settings, issue_key: str) -> str:
     return issue_key.strip().upper()
 
 
-def search_jira_issues(settings: Settings, *, jql: str, limit: int = 10) -> list[JiraIssue]:
+def search_jira_issues(
+    settings: Settings, *, jql: str, limit: int = 10
+) -> list[JiraIssue]:
     return JiraClient(settings).search_issues(jql=jql, limit=limit)
 
 
@@ -108,7 +115,9 @@ def create_jira_issue(
     if not resolved_project_key and parent_key and "-" in parent_key:
         resolved_project_key = parent_key.split("-", 1)[0]
     if not resolved_project_key:
-        raise ValueError("JIRA_PROJECT_KEY is required to create a Jira issue without a parent key")
+        raise ValueError(
+            "JIRA_PROJECT_KEY is required to create a Jira issue without a parent key"
+        )
 
     return JiraClient(settings).create_issue(
         project_key=resolved_project_key,
@@ -124,7 +133,9 @@ def get_jira_transitions(settings: Settings, *, issue_key: str) -> list[JiraTran
     return JiraClient(settings).get_transitions(issue_key)
 
 
-def transition_jira_issue(settings: Settings, *, issue_key: str, transition_name: str) -> str:
+def transition_jira_issue(
+    settings: Settings, *, issue_key: str, transition_name: str
+) -> str:
     issue_key = resolve_jira_issue_key(settings, issue_key)
     transition = JiraClient(settings).transition_issue(issue_key, transition_name)
     if transition.target_status:
@@ -138,7 +149,9 @@ def add_jira_comment(settings: Settings, *, issue_key: str, text: str) -> str:
     return f"{issue_key}: комментарий добавлен."
 
 
-def update_jira_issue_fields(settings: Settings, *, issue_key: str, fields: dict[str, Any]) -> str:
+def update_jira_issue_fields(
+    settings: Settings, *, issue_key: str, fields: dict[str, Any]
+) -> str:
     issue_key = resolve_jira_issue_key(settings, issue_key)
     client = JiraClient(settings)
     fields = dict(fields)

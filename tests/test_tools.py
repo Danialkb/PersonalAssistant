@@ -32,9 +32,14 @@ def test_format_jira_issues() -> None:
 
 
 def test_combine_jql_with_updated_today_keeps_assignee_and_replaces_order() -> None:
-    output = combine_jql_with_updated_today("assignee = currentUser() ORDER BY priority DESC")
+    output = combine_jql_with_updated_today(
+        "assignee = currentUser() ORDER BY priority DESC"
+    )
 
-    assert output == "(assignee = currentUser()) AND (updated >= startOfDay()) ORDER BY updated DESC"
+    assert (
+        output
+        == "(assignee = currentUser()) AND (updated >= startOfDay()) ORDER BY updated DESC"
+    )
 
 
 def test_get_jira_tasks_filters_by_current_user_by_default(monkeypatch) -> None:
@@ -51,7 +56,9 @@ def test_get_jira_tasks_filters_by_current_user_by_default(monkeypatch) -> None:
 
     monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
-    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"
+    )
 
     get_jira_tasks(settings, limit=7)
 
@@ -121,7 +128,9 @@ def test_update_jira_issue_fields_maps_description_add_to_append(monkeypatch) ->
     }
 
 
-def test_update_jira_issue_fields_maps_string_description_to_append(monkeypatch) -> None:
+def test_update_jira_issue_fields_maps_string_description_to_append(
+    monkeypatch,
+) -> None:
     captured: dict[str, Any] = {}
 
     class StubJiraClient:
@@ -177,7 +186,9 @@ def test_create_jira_issue_uses_parent_project_key(monkeypatch) -> None:
 
     monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
-    settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"
+    )
 
     issue = create_jira_issue(
         settings,

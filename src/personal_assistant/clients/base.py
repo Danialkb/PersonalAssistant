@@ -70,7 +70,9 @@ class HttpApiClient:
             message = str(exc)
             if details:
                 message = f"{message}\n{self.service_name} response: {details}"
-            raise httpx.HTTPStatusError(message, request=exc.request, response=exc.response) from exc
+            raise httpx.HTTPStatusError(
+                message, request=exc.request, response=exc.response
+            ) from exc
 
     def _response_error_details(self, response: httpx.Response) -> str:
         try:

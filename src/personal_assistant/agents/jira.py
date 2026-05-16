@@ -2,11 +2,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
-from jira.settings import Settings
-from jira.tools import (
+from personal_assistant.settings import Settings
+from personal_assistant.tools.jira import (
     format_jira_issue,
     format_jira_transitions,
     get_jira_issue as fetch_jira_issue,
@@ -95,18 +93,17 @@ def get_jira_transitions(ctx: RunContext[Settings], issue_key: str) -> str:
     return format_jira_transitions(fetch_jira_transitions(ctx.deps, issue_key=issue_key))
 
 
-class AssistantAgent:
-    def __init__(self, settings: Settings) -> None:
+class JiraAgent:
+    name = "jira"
+
+    def __init__(self, settings: Settings, *, model: Any | None = None) -> None:
         self._settings = settings
         self._agent: Agent[Settings, str] | None = None
         self._planner: Agent[None, JiraCommand] | None = None
-        if not settings.OPENAI_API_KEY:
+
+        if model is None:
             return
 
-        model = OpenAIChatModel(
-            self._openai_model_name(settings.OPENAI_MODEL),
-            provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY),
-        )
         self._agent = Agent(
             model,
             deps_type=Settings,
@@ -151,7 +148,3 @@ class AssistantAgent:
         if "jira" in normalized or "джир" in normalized or "задач" in normalized:
             return JiraCommand(action="search", limit=10)
         return JiraCommand(action="answer", message=self._handle_locally(text))
-
-    @staticmethod
-    def _openai_model_name(model: str) -> str:
-        return model.removeprefix("openai:")

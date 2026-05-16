@@ -1,9 +1,10 @@
 from typing import Any
 
-from jira.agent import AssistantAgent, JiraCommand
-from jira.cli import ChatSession, main
-from jira.jira_client import JiraIssue
-from jira.settings import Settings
+from personal_assistant.agents.jira import JiraCommand
+from personal_assistant.assistant import AssistantAgent
+from personal_assistant.clients.jira import JiraIssue, JiraTransition
+from personal_assistant.cli import ChatSession, main
+from personal_assistant.settings import Settings
 
 
 class StubAgent:
@@ -17,6 +18,14 @@ class StubAgent:
         return "fallback"
 
 
+def stub_transitions(*args: Any, **kwargs: Any) -> list[JiraTransition]:
+    return [
+        JiraTransition(id="11", name="In Progress", target_status="In Progress"),
+        JiraTransition(id="21", name="Code Review", target_status="Code Review"),
+        JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+    ]
+
+
 def test_chat_session_does_not_apply_write_without_confirmation(monkeypatch) -> None:
     called: dict[str, Any] = {}
 
@@ -24,7 +33,8 @@ def test_chat_session_does_not_apply_write_without_confirmation(monkeypatch) -> 
         called["transition"] = kwargs
         return "changed"
 
-    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
         StubAgent(JiraCommand(action="transition", issue_key="PA-12", transition="In Progress")),
@@ -45,7 +55,8 @@ def test_chat_session_applies_write_after_confirmation(monkeypatch) -> None:
         captured.update(kwargs)
         return "PA-12: выполнен transition In Progress."
 
-    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
         StubAgent(JiraCommand(action="transition", issue_key="PA-12", transition="In Progress")),
@@ -67,7 +78,8 @@ def test_chat_session_resolves_bare_issue_number_with_project_key(monkeypatch) -
         captured.update(kwargs)
         return "CCO-2284: выполнен transition Code Review."
 
-    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     session = ChatSession(
         StubAgent(JiraCommand(action="transition", issue_key="2284", transition="Code Review")),
@@ -100,7 +112,8 @@ def test_chat_session_remembers_issue_after_failed_write(monkeypatch) -> None:
         settings,
         confirm=lambda preview: True,
     )
-    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     try:
         session.handle("закинь 2321 в ready for testing")
@@ -133,9 +146,10 @@ def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr("sys.argv", ["jira", "перенеси", "задачу", "2284", "в", "jira", "установи", "Code review"])
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    monkeypatch.setattr("jira.cli.get_settings", lambda: StubSettings())
-    monkeypatch.setattr("jira.cli.AssistantAgent", StubAssistant)
-    monkeypatch.setattr("jira.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_settings", lambda: StubSettings())
+    monkeypatch.setattr("personal_assistant.cli.AssistantAgent", StubAssistant)
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr("personal_assistant.cli.get_jira_transitions", stub_transitions)
 
     main()
 
@@ -143,6 +157,79 @@ def test_one_shot_prompt_uses_chat_executor(monkeypatch, capsys) -> None:
     assert "Изменить статус CCO-2284: Code Review" in output
     assert "CCO-2284: выполнен transition Code Review." in output
     assert captured["issue_key"] == "CCO-2284"
+
+
+def test_chat_session_rejects_unknown_transition_before_confirmation(monkeypatch) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_confirm(preview: str) -> bool:
+        called["confirm"] = preview
+        return True
+
+    def fake_transition(*args: Any, **kwargs: Any) -> str:
+        called["transition"] = kwargs
+        return "changed"
+
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr(
+        "personal_assistant.cli.get_jira_transitions",
+        lambda *args, **kwargs: [
+            JiraTransition(id="21", name="Code Review", target_status="Code Review"),
+            JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+        ],
+    )
+
+    session = ChatSession(
+        StubAgent(JiraCommand(action="transition", issue_key="2329", transition="QA Review")),
+        Settings(
+            JIRA_BASE_URL="https://example.atlassian.net",
+            JIRA_API_KEY="token",
+            JIRA_PROJECT_KEY="CCO",
+        ),
+        confirm=fake_confirm,
+    )
+
+    output = session.handle("я передал на ревью 2329 обнови статус")
+
+    assert "такого доступного transition/status сейчас нет" in output
+    assert "Code Review" in output
+    assert "Ready for Testing" in output
+    assert "confirm" not in called
+    assert "transition" not in called
+
+
+def test_chat_session_normalizes_partial_transition_to_existing_option(monkeypatch) -> None:
+    previews: list[str] = []
+    captured: dict[str, Any] = {}
+
+    def fake_transition(*args: Any, **kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "CCO-2329: выполнен transition Code Review."
+
+    monkeypatch.setattr("personal_assistant.cli.transition_jira_issue", fake_transition)
+    monkeypatch.setattr(
+        "personal_assistant.cli.get_jira_transitions",
+        lambda *args, **kwargs: [
+            JiraTransition(id="21", name="Code Review", target_status="Code Review"),
+            JiraTransition(id="31", name="Ready for Testing", target_status="Ready for Testing"),
+        ],
+    )
+
+    session = ChatSession(
+        StubAgent(JiraCommand(action="transition", issue_key="2329", transition="Review")),
+        Settings(
+            JIRA_BASE_URL="https://example.atlassian.net",
+            JIRA_API_KEY="token",
+            JIRA_PROJECT_KEY="CCO",
+        ),
+        confirm=lambda preview: previews.append(preview) or True,
+    )
+
+    output = session.handle("я передал на ревью 2329 обнови статус")
+
+    assert output == "CCO-2329: выполнен transition Code Review."
+    assert previews == ["Изменить статус CCO-2329: Code Review"]
+    assert captured["transition_name"] == "Code Review"
 
 
 def test_assistant_prompt_starts_interactive_session(monkeypatch, capsys) -> None:
@@ -163,8 +250,8 @@ def test_assistant_prompt_starts_interactive_session(monkeypatch, capsys) -> Non
     inputs = iter(["/exit"])
     monkeypatch.setattr("sys.argv", ["assistant", "привет"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
-    monkeypatch.setattr("jira.cli.get_settings", lambda: StubSettings())
-    monkeypatch.setattr("jira.cli.AssistantAgent", StubAssistant)
+    monkeypatch.setattr("personal_assistant.cli.get_settings", lambda: StubSettings())
+    monkeypatch.setattr("personal_assistant.cli.AssistantAgent", StubAssistant)
 
     main()
 
@@ -198,14 +285,14 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(monkeypatch
         settings,
         confirm=lambda preview: True,
     )
-    monkeypatch.setattr("jira.cli.search_jira_issues", fake_search)
+    monkeypatch.setattr("personal_assistant.cli.search_jira_issues", fake_search)
 
     output = session.handle("покажи задачи")
 
     assert "PA-1: First" in output
 
     session._agent = StubAgent(JiraCommand(action="comment", issue_key="первая", comment="беру в работу"))
-    monkeypatch.setattr("jira.cli.add_jira_comment", fake_comment)
+    monkeypatch.setattr("personal_assistant.cli.add_jira_comment", fake_comment)
 
     output = session.handle("напиши в первую")
 
@@ -243,7 +330,7 @@ def test_chat_session_analyzes_productivity_without_table_output(monkeypatch) ->
         StubAgent(JiraCommand(action="analyze_productivity", limit=20)),
         settings,
     )
-    monkeypatch.setattr("jira.cli.search_jira_issues", fake_search)
+    monkeypatch.setattr("personal_assistant.cli.search_jira_issues", fake_search)
 
     output = session.handle("проанализируй мою производительность за сегодня")
 
@@ -308,7 +395,7 @@ def test_chat_session_creates_child_issue(monkeypatch) -> None:
             url="https://example.atlassian.net/browse/CCO-2000",
         )
 
-    monkeypatch.setattr("jira.cli.create_jira_issue", fake_create_issue)
+    monkeypatch.setattr("personal_assistant.cli.create_jira_issue", fake_create_issue)
 
     session = ChatSession(
         StubAgent(
@@ -350,7 +437,7 @@ def test_chat_session_keeps_explicit_child_issue_type(monkeypatch) -> None:
             url="https://example.atlassian.net/browse/CCO-2001",
         )
 
-    monkeypatch.setattr("jira.cli.create_jira_issue", fake_create_issue)
+    monkeypatch.setattr("personal_assistant.cli.create_jira_issue", fake_create_issue)
 
     session = ChatSession(
         StubAgent(

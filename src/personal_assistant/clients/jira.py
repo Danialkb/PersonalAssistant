@@ -3,7 +3,8 @@ from typing import Any
 
 import httpx
 
-from jira.settings import Settings
+from personal_assistant.clients.base import HttpApiClient
+from personal_assistant.settings import Settings
 
 
 @dataclass(frozen=True)
@@ -30,14 +31,16 @@ class JiraTransition:
     target_status: str | None = None
 
 
-class JiraClient:
+class JiraClient(HttpApiClient):
+    service_name = "Jira"
+
     def __init__(self, settings: Settings) -> None:
+        super().__init__(settings.JIRA_BASE_URL)
         self._settings = settings
-        self._base_url = settings.JIRA_BASE_URL.rstrip("/")
 
     def search_issues(self, *, jql: str, limit: int = 5) -> list[JiraIssue]:
-        response = httpx.get(
-            f"{self._base_url}/rest/api/3/search/jql",
+        response = self._get(
+            "/rest/api/3/search/jql",
             params={
                 "jql": jql,
                 "maxResults": limit,
@@ -45,15 +48,13 @@ class JiraClient:
             },
             auth=self._auth(),
             headers=self._headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         payload = response.json()
         return [self._parse_issue(issue) for issue in payload.get("issues", [])]
 
     def get_issue(self, issue_key: str) -> JiraIssue:
-        response = httpx.get(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}",
+        response = self._get(
+            f"/rest/api/3/issue/{issue_key}",
             params={
                 "fields": (
                     "summary,status,priority,assignee,issuetype,description,"
@@ -62,9 +63,7 @@ class JiraClient:
             },
             auth=self._auth(),
             headers=self._headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         return self._parse_issue(response.json())
 
     def create_issue(
@@ -86,36 +85,30 @@ class JiraClient:
         if parent_key:
             fields["parent"] = {"key": parent_key}
 
-        response = httpx.post(
-            f"{self._base_url}/rest/api/3/issue",
+        response = self._post(
+            "/rest/api/3/issue",
             json={"fields": fields},
             auth=self._auth(),
             headers=self._json_headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         return self.get_issue(response.json()["key"])
 
     def get_issue_description(self, issue_key: str) -> dict[str, Any] | None:
-        response = httpx.get(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}",
+        response = self._get(
+            f"/rest/api/3/issue/{issue_key}",
             params={"fields": "description"},
             auth=self._auth(),
             headers=self._headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         description = response.json().get("fields", {}).get("description")
         return description if isinstance(description, dict) else None
 
     def get_transitions(self, issue_key: str) -> list[JiraTransition]:
-        response = httpx.get(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}/transitions",
+        response = self._get(
+            f"/rest/api/3/issue/{issue_key}/transitions",
             auth=self._auth(),
             headers=self._headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         transitions = response.json().get("transitions", [])
         return [
             JiraTransition(
@@ -129,35 +122,29 @@ class JiraClient:
     def transition_issue(self, issue_key: str, transition_name: str) -> JiraTransition:
         transitions = self.get_transitions(issue_key)
         transition = self._find_transition(transitions, transition_name)
-        response = httpx.post(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}/transitions",
+        self._post(
+            f"/rest/api/3/issue/{issue_key}/transitions",
             json={"transition": {"id": transition.id}},
             auth=self._auth(),
             headers=self._json_headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
         return transition
 
     def add_comment(self, issue_key: str, text: str) -> None:
-        response = httpx.post(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}/comment",
+        self._post(
+            f"/rest/api/3/issue/{issue_key}/comment",
             json={"body": self._adf_from_text(text)},
             auth=self._auth(),
             headers=self._json_headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
 
     def update_issue_fields(self, issue_key: str, fields: dict[str, Any]) -> None:
-        response = httpx.put(
-            f"{self._base_url}/rest/api/3/issue/{issue_key}",
+        self._put(
+            f"/rest/api/3/issue/{issue_key}",
             json={"fields": fields},
             auth=self._auth(),
             headers=self._json_headers(),
-            timeout=20,
         )
-        self._raise_for_status(response)
 
     def append_description(self, issue_key: str, text: str) -> None:
         current_description = self.get_issue_description(issue_key)
@@ -323,19 +310,7 @@ class JiraClient:
             "content": content,
         }
 
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            details = JiraClient._response_error_details(response)
-            message = str(exc)
-            if details:
-                message = f"{message}\nJira response: {details}"
-            raise httpx.HTTPStatusError(message, request=exc.request, response=exc.response) from exc
-
-    @staticmethod
-    def _response_error_details(response: httpx.Response) -> str:
+    def _response_error_details(self, response: httpx.Response) -> str:
         try:
             payload = response.json()
         except ValueError:

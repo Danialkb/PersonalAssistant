@@ -6,7 +6,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from jira.jira_client import JiraIssue
+from personal_assistant.clients.jira import JiraIssue
 
 
 class TerminalUI:

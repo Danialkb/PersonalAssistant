@@ -1,8 +1,8 @@
 import re
 from typing import Any
 
-from jira.jira_client import JiraClient, JiraIssue, JiraTransition
-from jira.settings import Settings
+from personal_assistant.clients.jira import JiraClient, JiraIssue, JiraTransition
+from personal_assistant.settings import Settings
 
 
 def combine_jql_with_text_search(default_jql: str, search_text: str) -> str:

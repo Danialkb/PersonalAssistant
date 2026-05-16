@@ -7,22 +7,25 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from jira.agent import AssistantAgent, JiraCommand
-from jira.jira_client import JiraIssue
-from jira.settings import get_settings
-from jira.tools import (
+from personal_assistant.agents.jira import JiraCommand
+from personal_assistant.assistant import AssistantAgent
+from personal_assistant.clients.jira import JiraIssue, JiraTransition
+from personal_assistant.settings import get_settings
+from personal_assistant.tools.jira import (
     add_jira_comment,
     combine_jql_with_updated_today,
     create_jira_issue,
     format_jira_issue,
     format_jira_issues,
+    format_jira_transitions,
     get_jira_issue,
+    get_jira_transitions,
     resolve_jira_issue_key,
     search_jira_issues,
     transition_jira_issue,
     update_jira_issue_fields,
 )
-from jira.ui import TerminalUI
+from personal_assistant.ui import TerminalUI
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -134,14 +137,13 @@ class ChatSession:
             return "Для изменения Jira нужно указать задачу, например PA-12."
         self._current_issue_key = issue_key
 
+        if command.action == "transition":
+            return self._execute_transition(command, issue_key)
+
         preview = self._preview_write(command, issue_key)
         if not self._confirm(preview):
             return "Изменение отменено."
 
-        if command.action == "transition":
-            if not command.transition:
-                return "Не указан целевой статус или transition."
-            return transition_jira_issue(self._settings, issue_key=issue_key, transition_name=command.transition)
         if command.action == "comment":
             if not command.comment:
                 return "Не указан текст комментария."
@@ -152,6 +154,21 @@ class ChatSession:
             return update_jira_issue_fields(self._settings, issue_key=issue_key, fields=command.fields)
 
         return "Эта write-команда пока не поддержана."
+
+    def _execute_transition(self, command: JiraCommand, issue_key: str) -> str:
+        if not command.transition:
+            return "Не указан целевой статус или transition."
+
+        transitions = get_jira_transitions(self._settings, issue_key=issue_key)
+        transition = self._find_transition(transitions, command.transition)
+        if not transition:
+            return self._format_unknown_transition(issue_key, command.transition, transitions)
+
+        preview = self._preview_transition(issue_key, transition)
+        if not self._confirm(preview):
+            return "Изменение отменено."
+
+        return transition_jira_issue(self._settings, issue_key=issue_key, transition_name=transition.name)
 
     def _create_issue(self, command: JiraCommand) -> str:
         if not command.summary:
@@ -181,6 +198,44 @@ class ChatSession:
             return f"Добавить комментарий в {issue_key}:\n{command.comment}"
         fields = ", ".join(f"{key}={value!r}" for key, value in command.fields.items())
         return f"Обновить поля {issue_key}: {fields}"
+
+    @staticmethod
+    def _preview_transition(issue_key: str, transition: JiraTransition) -> str:
+        if transition.target_status and transition.target_status != transition.name:
+            return f"Изменить статус {issue_key}: {transition.name} -> {transition.target_status}"
+        return f"Изменить статус {issue_key}: {transition.name}"
+
+    @staticmethod
+    def _find_transition(transitions: list[JiraTransition], requested: str) -> JiraTransition | None:
+        normalized = requested.strip().lower()
+        for transition in transitions:
+            if transition.name.lower() == normalized or (transition.target_status or "").lower() == normalized:
+                return transition
+        partial_matches = [
+            transition
+            for transition in transitions
+            if normalized
+            and (
+                normalized in transition.name.lower()
+                or normalized in (transition.target_status or "").lower()
+                or transition.name.lower() in normalized
+                or (transition.target_status or "").lower() in normalized
+            )
+        ]
+        if len(partial_matches) == 1:
+            return partial_matches[0]
+        return None
+
+    @staticmethod
+    def _format_unknown_transition(issue_key: str, requested: str, transitions: list[JiraTransition]) -> str:
+        lines = [
+            f"Не могу изменить статус {issue_key} на {requested!r}: такого доступного transition/status сейчас нет.",
+            "",
+            format_jira_transitions(transitions),
+            "",
+            "Укажи один из доступных вариантов.",
+        ]
+        return "\n".join(lines)
 
     def _preview_create_issue(self, command: JiraCommand, *, issue_type: str, parent_key: str | None) -> str:
         lines = [

@@ -12,15 +12,15 @@ dependencies = [
 ]
 
 [project.scripts]
-jira = "jira.cli:main"
-assistant = "jira.cli:main"
+jira = "personal_assistant.cli:main"
+assistant = "personal_assistant.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jira"]
+packages = ["src/personal_assistant"]
 
 [dependency-groups]
 dev = [

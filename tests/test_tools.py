@@ -1,9 +1,9 @@
 from typing import Any
 
-from jira.jira_client import JiraIssue
-from jira.settings import Settings
+from personal_assistant.clients.jira import JiraIssue
+from personal_assistant.settings import Settings
 
-from jira.tools import (
+from personal_assistant.tools.jira import (
     combine_jql_with_updated_today,
     create_jira_issue,
     format_jira_issues,
@@ -49,7 +49,7 @@ def test_get_jira_tasks_filters_by_current_user_by_default(monkeypatch) -> None:
             captured["limit"] = limit
             return []
 
-    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+    monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
     settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
 
@@ -72,7 +72,7 @@ def test_get_jira_tasks_filters_by_configured_account(monkeypatch) -> None:
             captured["jql"] = jql
             return []
 
-    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+    monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
     settings = Settings(
         JIRA_BASE_URL="https://example.atlassian.net",
@@ -98,7 +98,7 @@ def test_update_jira_issue_fields_maps_description_add_to_append(monkeypatch) ->
         def update_issue_fields(self, issue_key: str, fields: dict[str, Any]) -> None:
             captured["update_issue_fields"] = {"issue_key": issue_key, "fields": fields}
 
-    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+    monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
     settings = Settings(
         JIRA_BASE_URL="https://example.atlassian.net",
@@ -134,7 +134,7 @@ def test_update_jira_issue_fields_maps_string_description_to_append(monkeypatch)
         def update_issue_fields(self, issue_key: str, fields: dict[str, Any]) -> None:
             captured["update_issue_fields"] = {"issue_key": issue_key, "fields": fields}
 
-    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+    monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
     settings = Settings(
         JIRA_BASE_URL="https://example.atlassian.net",
@@ -175,7 +175,7 @@ def test_create_jira_issue_uses_parent_project_key(monkeypatch) -> None:
                 url="https://example.atlassian.net/browse/CCO-2000",
             )
 
-    monkeypatch.setattr("jira.tools.JiraClient", StubJiraClient)
+    monkeypatch.setattr("personal_assistant.tools.jira.JiraClient", StubJiraClient)
 
     settings = Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token")
 

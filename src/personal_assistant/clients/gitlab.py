@@ -149,14 +149,15 @@ class GitlabClient(HttpApiClient):
     def get_merge_request_changes(
         self, project: int | str, iid: int
     ) -> list[GitlabMergeRequestChange]:
-        response = self._get(
-            f"/projects/{self._project_id(project)}/merge_requests/{iid}/changes",
-            headers=self._headers(),
-        )
-        return [
-            self._parse_merge_request_change(change)
-            for change in response.json().get("changes", [])
-        ]
+        path = f"/projects/{self._project_id(project)}/merge_requests/{iid}/diffs"
+        try:
+            changes = self._get_paginated(path, params={"per_page": 100})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            changes = self._get_legacy_merge_request_changes(project, iid)
+
+        return [self._parse_merge_request_change(change) for change in changes]
 
     def create_merge_request_note(
         self, project: int | str, iid: int, body: str
@@ -266,6 +267,31 @@ class GitlabClient(HttpApiClient):
     @staticmethod
     def _clean_params(params: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in params.items() if value is not None}
+
+    def _get_paginated(
+        self, path: str, *, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        page = "1"
+        items: list[dict[str, Any]] = []
+        while page:
+            page_params = dict(params or {})
+            page_params["page"] = page
+            response = self._get(path, params=page_params, headers=self._headers())
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise ValueError(f"Expected GitLab list response for {path}")
+            items.extend(payload)
+            page = response.headers.get("X-Next-Page", "").strip()
+        return items
+
+    def _get_legacy_merge_request_changes(
+        self, project: int | str, iid: int
+    ) -> list[dict[str, Any]]:
+        response = self._get(
+            f"/projects/{self._project_id(project)}/merge_requests/{iid}/changes",
+            headers=self._headers(),
+        )
+        return list(response.json().get("changes", []))
 
     def _parse_project(self, project: dict[str, Any]) -> GitlabProject:
         return GitlabProject(

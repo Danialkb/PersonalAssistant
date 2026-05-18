@@ -1,9 +1,17 @@
+import re
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+from urllib.parse import unquote, urlparse
 
+import httpx
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from personal_assistant.agents.base import (
+    AgentResponse,
+    ConfirmCallback,
+    TextStreamCallback,
+)
 from personal_assistant.services.gitlab_mr import GitLabMRReviewContext, GitLabMRService
 from personal_assistant.settings import Settings
 
@@ -35,6 +43,17 @@ class MRReviewResult(BaseModel):
     risk_assessment: str
     comments: list[MRReviewComment] = Field(default_factory=list)
     recommendation: ReviewRecommendation
+
+
+class GitLabMRCommand(BaseModel):
+    action: Literal["answer", "review"] = "answer"
+    message: str = ""
+    project: str | None = None
+    merge_request_iid: int | None = Field(default=None, ge=1)
+
+    @property
+    def can_review(self) -> bool:
+        return bool(self.project and self.merge_request_iid)
 
 
 class MRReviewer(Protocol):
@@ -168,23 +187,81 @@ class GitLabMRReviewAgent:
             raise ValueError(
                 "OPENAI_API_KEY is required to review GitLab merge requests"
             )
-        context = self._service.load_review_context(project, merge_request_iid)
+        context = self._load_review_context(project, merge_request_iid)
         prompt = self._prompt_builder.build(context)
         return self._reviewer.review(prompt)
 
+    def _load_review_context(
+        self, project: int | str, merge_request_iid: int
+    ) -> GitLabMRReviewContext:
+        try:
+            return self._service.load_review_context(project, merge_request_iid)
+        except httpx.ConnectTimeout as exc:
+            host = _request_host(exc)
+            raise ValueError(
+                f"Не могу подключиться к GitLab{host}: соединение истекло по timeout. "
+                "Проверь VPN, доступность GITLAB_BASE_URL из терминала и корпоративную сеть."
+            ) from exc
+        except httpx.TimeoutException as exc:
+            host = _request_host(exc)
+            raise ValueError(
+                f"GitLab{host} не ответил вовремя при загрузке MR context. "
+                "Попробуй повторить позже или увеличить timeout клиента, если GitLab отвечает медленно."
+            ) from exc
+        except httpx.RequestError as exc:
+            host = _request_host(exc)
+            raise ValueError(f"Не удалось загрузить GitLab MR context{host}: {exc}") from exc
+
     def handle_text(self, text: str) -> str:
-        return (
-            "GitLab MR reviewer expects a project and merge request IID. "
-            "Use GitLabMRReviewAgent.review_merge_request(project, merge_request_iid)."
+        return self.handle_prompt(text).text
+
+    def plan_command(self, text: str, *, context: str = "") -> GitLabMRCommand:
+        reference = parse_gitlab_mr_reference(text)
+        if reference:
+            project, merge_request_iid = reference
+            return GitLabMRCommand(
+                action="review",
+                project=project,
+                merge_request_iid=merge_request_iid,
+            )
+        return GitLabMRCommand(
+            message=(
+                "Укажи GitLab MR ссылкой вида "
+                "https://gitlab.company.com/group/project/-/merge_requests/123 "
+                "или текстом: gitlab mr group/project 123."
+            )
         )
 
-    def plan_command(self, text: str, *, context: str = "") -> MRReviewResult:
-        return MRReviewResult(
-            summary="GitLab MR review needs explicit project and merge request IID.",
-            risk_assessment="Not reviewed.",
-            comments=[],
-            recommendation=ReviewRecommendation.APPROVE_WITH_SUGGESTIONS,
+    def handle_prompt(
+        self,
+        text: str,
+        *,
+        context: str = "",
+        confirm: ConfirmCallback | None = None,
+    ) -> AgentResponse:
+        command = self.plan_command(text, context=context)
+        if command.action != "review" or not command.can_review:
+            return AgentResponse(command.message)
+        result = self.review_merge_request(
+            command.project or "", command.merge_request_iid or 0
         )
+        return AgentResponse(format_mr_review_result(result))
+
+    async def handle_prompt_stream(
+        self,
+        text: str,
+        *,
+        context: str = "",
+        confirm: ConfirmCallback | None = None,
+        on_text_delta: TextStreamCallback | None = None,
+    ) -> AgentResponse:
+        return self.handle_prompt(text, context=context, confirm=confirm)
+
+    def context_summary(self) -> str:
+        return ""
+
+    def reset_context(self) -> None:
+        return None
 
 
 def format_mr_review_result(result: MRReviewResult) -> str:
@@ -208,3 +285,47 @@ def format_mr_review_result(result: MRReviewResult) -> str:
         if comment.suggested_change:
             lines.append(f"  Suggested change: {comment.suggested_change}")
     return "\n".join(lines)
+
+
+def parse_gitlab_mr_reference(text: str) -> tuple[str, int] | None:
+    url_reference = _parse_gitlab_mr_url(text)
+    if url_reference:
+        return url_reference
+    return _parse_gitlab_mr_text(text)
+
+
+def _parse_gitlab_mr_url(text: str) -> tuple[str, int] | None:
+    for raw_url in re.findall(r"https?://\S+", text):
+        parsed = urlparse(raw_url.rstrip(".,;)"))
+        parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        for index, part in enumerate(parts):
+            if (
+                part == "-"
+                and index + 2 < len(parts)
+                and parts[index + 1] == "merge_requests"
+                and parts[index + 2].isdigit()
+            ):
+                project = "/".join(parts[:index])
+                if project:
+                    return project, int(parts[index + 2])
+    return None
+
+
+def _parse_gitlab_mr_text(text: str) -> tuple[str, int] | None:
+    match = re.search(
+        r"\b(?:gitlab\s+)?(?:mr|merge\s+request)\s+"
+        r"(?P<project>[A-Za-z0-9_.~/%-]+)\s+!?(?P<iid>\d+)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return unquote(match.group("project")), int(match.group("iid"))
+
+
+def _request_host(exc: httpx.RequestError) -> str:
+    request = exc.request
+    if request is None:
+        return ""
+    url = request.url
+    return f" ({url.scheme}://{url.host})"

@@ -1,3 +1,6 @@
+import httpx
+import pytest
+
 from personal_assistant.agents.gitlab import (
     GitLabMRReviewAgent,
     MRReviewPromptBuilder,
@@ -5,7 +8,10 @@ from personal_assistant.agents.gitlab import (
     ReviewRecommendation,
     ReviewSeverity,
     format_mr_review_result,
+    parse_gitlab_mr_reference,
 )
+from personal_assistant.agents.jira import JiraCommand
+from personal_assistant.assistant import AssistantAgent
 from personal_assistant.clients.gitlab import (
     GitlabMergeRequest,
     GitlabMergeRequestChange,
@@ -13,6 +19,7 @@ from personal_assistant.clients.gitlab import (
     GitlabUser,
 )
 from personal_assistant.services.gitlab_mr import GitLabMRReviewContext
+from personal_assistant.settings import Settings
 
 
 def make_context() -> GitLabMRReviewContext:
@@ -84,6 +91,179 @@ def test_review_agent_loads_context_and_returns_structured_result() -> None:
     assert captured["merge_request_iid"] == 7
     assert "Review this GitLab merge request" in str(captured["prompt"])
     assert result.recommendation == ReviewRecommendation.APPROVE
+
+
+def test_parse_gitlab_mr_reference_from_url() -> None:
+    reference = parse_gitlab_mr_reference(
+        "проверь MR "
+        "https://gitlab.company.com/cff/corporate-offline-cabinet/-/merge_requests/1680"
+    )
+
+    assert reference == ("cff/corporate-offline-cabinet", 1680)
+
+
+def test_parse_gitlab_mr_reference_from_project_and_iid() -> None:
+    reference = parse_gitlab_mr_reference(
+        "проверь gitlab mr cff/corporate-offline-cabinet 1680"
+    )
+
+    assert reference == ("cff/corporate-offline-cabinet", 1680)
+
+
+def test_review_agent_handles_cli_prompt_with_mr_url() -> None:
+    captured: dict[str, object] = {}
+
+    class StubService:
+        def load_review_context(
+            self, project: int | str, merge_request_iid: int
+        ) -> GitLabMRReviewContext:
+            captured["project"] = project
+            captured["merge_request_iid"] = merge_request_iid
+            return make_context()
+
+    class StubReviewer:
+        def review(self, prompt: str) -> MRReviewResult:
+            return MRReviewResult(
+                summary="MR is ready for review.",
+                risk_assessment="Low risk.",
+                comments=[],
+                recommendation=ReviewRecommendation.APPROVE,
+            )
+
+    agent = GitLabMRReviewAgent(StubService(), reviewer=StubReviewer())  # type: ignore[arg-type]
+
+    response = agent.handle_prompt(
+        "проверь MR "
+        "https://gitlab.company.com/cff/corporate-offline-cabinet/-/merge_requests/1680"
+    )
+
+    assert captured == {
+        "project": "cff/corporate-offline-cabinet",
+        "merge_request_iid": 1680,
+    }
+    assert "Summary: MR is ready for review." in response.text
+    assert "Recommendation: approve" in response.text
+
+
+def test_review_agent_reports_gitlab_connect_timeout() -> None:
+    class StubService:
+        def load_review_context(
+            self, project: int | str, merge_request_iid: int
+        ) -> GitLabMRReviewContext:
+            request = httpx.Request(
+                "GET",
+                "https://gitlab.example.com/api/v4/projects/team%2Fassistant",
+            )
+            raise httpx.ConnectTimeout("timed out", request=request)
+
+    class StubReviewer:
+        def review(self, prompt: str) -> MRReviewResult:
+            raise AssertionError("review should not start without GitLab context")
+
+    agent = GitLabMRReviewAgent(StubService(), reviewer=StubReviewer())  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError) as exc_info:
+        agent.review_merge_request("team/assistant", 7)
+
+    message = str(exc_info.value)
+    assert "Не могу подключиться к GitLab (https://gitlab.example.com)" in message
+    assert "VPN" in message
+
+
+def test_assistant_routes_gitlab_mr_url_to_gitlab_agent() -> None:
+    class StubJiraAgent:
+        name = "jira"
+
+        def handle_text(self, text: str) -> str:
+            return "jira text"
+
+        def plan_command(self, text: str, *, context: str = "") -> JiraCommand:
+            return JiraCommand(action="answer", message="jira plan")
+
+        def handle_prompt(self, text: str, *, context: str = "", confirm=None):
+            return self.plan_command(text, context=context)
+
+        def context_summary(self) -> str:
+            return ""
+
+        def reset_context(self) -> None:
+            return None
+
+    class StubGitLabAgent:
+        name = "gitlab"
+
+        def handle_text(self, text: str) -> str:
+            return "gitlab text"
+
+        def plan_command(self, text: str, *, context: str = "") -> MRReviewResult:
+            return MRReviewResult(
+                summary="gitlab",
+                risk_assessment="low",
+                comments=[],
+                recommendation=ReviewRecommendation.APPROVE,
+            )
+
+        def handle_prompt(self, text: str, *, context: str = "", confirm=None):
+            return self.plan_command(text, context=context)
+
+        def context_summary(self) -> str:
+            return ""
+
+        def reset_context(self) -> None:
+            return None
+
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net",
+        JIRA_API_KEY="token",
+    )
+    assistant = AssistantAgent(
+        settings,
+        agents=[StubJiraAgent(), StubGitLabAgent()],  # type: ignore[list-item]
+    )
+
+    command = assistant.plan_command(
+        "проверь MR https://gitlab.company.com/cff/app/-/merge_requests/1680"
+    )
+
+    assert isinstance(command, MRReviewResult)
+    assert command.summary == "gitlab"
+
+
+def test_assistant_does_not_route_gitlab_mr_url_to_jira_when_gitlab_is_missing() -> None:
+    class StubJiraAgent:
+        name = "jira"
+
+        def handle_text(self, text: str) -> str:
+            return "jira text"
+
+        def plan_command(self, text: str, *, context: str = "") -> JiraCommand:
+            return JiraCommand(action="answer", message="jira plan")
+
+        def handle_prompt(self, text: str, *, context: str = "", confirm=None):
+            raise AssertionError("GitLab MR URL should not be routed to Jira")
+
+        def context_summary(self) -> str:
+            return ""
+
+        def reset_context(self) -> None:
+            return None
+
+    settings = Settings(
+        JIRA_BASE_URL="https://example.atlassian.net",
+        JIRA_API_KEY="token",
+    )
+    assistant = AssistantAgent(
+        settings,
+        agents=[StubJiraAgent()],  # type: ignore[list-item]
+    )
+
+    response = assistant.handle_prompt(
+        "проверь MR https://gitlab.company.com/cff/app/-/merge_requests/1680"
+    )
+
+    assert "GitLab не настроен" in response.text
+    assert "GITLAB_BASE_URL" in response.text
+    assert "GITLAB_TOKEN" in response.text
 
 
 def test_format_mr_review_result_is_concise() -> None:

@@ -133,21 +133,21 @@ def test_get_merge_request_changes_parses_file_diff(
 
     def fake_request(method: str, url: str, **kwargs: Any) -> httpx.Response:
         captured["url"] = url
+        captured["params"] = kwargs["params"]
         request = httpx.Request(method, url)
         return httpx.Response(
             200,
-            json={
-                "changes": [
-                    {
-                        "old_path": "old.py",
-                        "new_path": "new.py",
-                        "diff": "@@ -1 +1 @@\n-old\n+new",
-                        "new_file": False,
-                        "renamed_file": True,
-                        "deleted_file": False,
-                    }
-                ]
-            },
+            json=[
+                {
+                    "old_path": "old.py",
+                    "new_path": "new.py",
+                    "diff": "@@ -1 +1 @@\n-old\n+new",
+                    "new_file": False,
+                    "renamed_file": True,
+                    "deleted_file": False,
+                }
+            ],
+            headers={"X-Next-Page": ""},
             request=request,
         )
 
@@ -159,12 +159,45 @@ def test_get_merge_request_changes_parses_file_diff(
 
     assert (
         captured["url"]
-        == "https://gitlab.example.com/api/v4/projects/team%2Fassistant/merge_requests/7/changes"
+        == "https://gitlab.example.com/api/v4/projects/team%2Fassistant/merge_requests/7/diffs"
     )
+    assert captured["params"] == {"per_page": 100, "page": "1"}
     assert len(changes) == 1
     assert changes[0].file_path == "new.py"
     assert changes[0].renamed_file is True
     assert changes[0].diff == "@@ -1 +1 @@\n-old\n+new"
+
+
+def test_get_merge_request_changes_follows_diff_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages: list[str] = []
+
+    def fake_request(method: str, url: str, **kwargs: Any) -> httpx.Response:
+        page = kwargs["params"]["page"]
+        pages.append(page)
+        request = httpx.Request(method, url)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "old_path": f"old-{page}.py",
+                    "new_path": f"new-{page}.py",
+                    "diff": f"@@ page {page}",
+                }
+            ],
+            headers={"X-Next-Page": "2" if page == "1" else ""},
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+
+    changes = GitlabClient(make_settings()).get_merge_request_changes(
+        "team/assistant", 7
+    )
+
+    assert pages == ["1", "2"]
+    assert [change.file_path for change in changes] == ["new-1.py", "new-2.py"]
 
 
 def test_gitlab_client_requires_settings() -> None:

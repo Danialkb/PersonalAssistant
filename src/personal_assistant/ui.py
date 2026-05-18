@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from personal_assistant.agents.base import AgentDisplay
 from personal_assistant.clients.jira import JiraIssue
 
 
@@ -22,7 +23,7 @@ class TerminalUI:
     def print_banner(self) -> None:
         self.console.print(
             Panel.fit(
-                "[bold cyan]Jira chat.[/bold cyan] /exit чтобы выйти, /clear чтобы очистить контекст.",
+                "[bold cyan]Assistant chat.[/bold cyan] /exit чтобы выйти, /clear чтобы очистить контекст.",
                 title="[bold]Personal Assistant[/bold]",
                 border_style="cyan",
             )
@@ -36,6 +37,19 @@ class TerminalUI:
 
     def print_assistant(self, message: str) -> None:
         self.console.print(Text(message))
+
+    def print_assistant_delta(self, delta: str) -> None:
+        self.console.print(Text(delta), end="")
+        self.console.file.flush()
+
+    def finish_assistant_stream(self) -> None:
+        self.console.print()
+
+    def print_display(self, display: AgentDisplay) -> None:
+        if display.kind == "jira_issues":
+            self.print_issues_table(display.payload)
+            return
+        self.print_assistant(str(display.payload))
 
     def print_issues_table(self, issues: list[JiraIssue]) -> None:
         if not issues:
@@ -66,7 +80,7 @@ class TerminalUI:
         self.console.print(
             Panel(
                 Text(preview),
-                title="[bold yellow]Confirm Jira Change[/bold yellow]",
+                title="[bold yellow]Confirm Change[/bold yellow]",
                 border_style="yellow",
             )
         )

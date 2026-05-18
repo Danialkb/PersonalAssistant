@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 
@@ -143,6 +145,83 @@ def test_review_agent_handles_cli_prompt_with_mr_url() -> None:
     }
     assert "Summary: MR is ready for review." in response.text
     assert "Recommendation: approve" in response.text
+    assert response.display is not None
+    assert response.display.kind == "gitlab_mr_review"
+    assert response.display.payload.recommendation == ReviewRecommendation.APPROVE
+
+
+def test_review_agent_asks_reviewer_to_answer_in_user_prompt_language() -> None:
+    captured: dict[str, object] = {}
+
+    class StubService:
+        def load_review_context(
+            self, project: int | str, merge_request_iid: int
+        ) -> GitLabMRReviewContext:
+            return make_context()
+
+    class StubReviewer:
+        def review(self, prompt: str) -> MRReviewResult:
+            captured["prompt"] = prompt
+            return MRReviewResult(
+                summary="Серьезных проблем не найдено.",
+                risk_assessment="Низкий риск.",
+                comments=[],
+                recommendation=ReviewRecommendation.APPROVE,
+            )
+
+    agent = GitLabMRReviewAgent(StubService(), reviewer=StubReviewer())  # type: ignore[arg-type]
+
+    agent.handle_prompt(
+        "проверь MR "
+        "https://gitlab.company.com/cff/corporate-offline-cabinet/-/merge_requests/1680"
+    )
+
+    prompt = str(captured["prompt"])
+    assert "User request:" in prompt
+    assert "проверь MR https://gitlab.company.com" in prompt
+    assert "same language as the user request" in prompt
+
+
+def test_review_agent_stream_uses_async_reviewer_inside_event_loop() -> None:
+    captured: dict[str, object] = {}
+
+    class StubService:
+        def load_review_context(
+            self, project: int | str, merge_request_iid: int
+        ) -> GitLabMRReviewContext:
+            captured["project"] = project
+            captured["merge_request_iid"] = merge_request_iid
+            return make_context()
+
+    class StubReviewer:
+        def review(self, prompt: str) -> MRReviewResult:
+            raise AssertionError("stream path should not call sync review")
+
+        async def review_async(self, prompt: str) -> MRReviewResult:
+            captured["prompt"] = prompt
+            return MRReviewResult(
+                summary="Async review works in CLI stream mode.",
+                risk_assessment="Low risk.",
+                comments=[],
+                recommendation=ReviewRecommendation.APPROVE,
+            )
+
+    agent = GitLabMRReviewAgent(StubService(), reviewer=StubReviewer())  # type: ignore[arg-type]
+
+    response = asyncio.run(
+        agent.handle_prompt_stream(
+            "проверь MR "
+            "https://gitlab.company.com/cff/corporate-offline-cabinet/-/merge_requests/1679"
+        )
+    )
+
+    assert captured["project"] == "cff/corporate-offline-cabinet"
+    assert captured["merge_request_iid"] == 1679
+    assert "Review this GitLab merge request" in str(captured["prompt"])
+    assert "Summary: Async review works in CLI stream mode." in response.text
+    assert "Recommendation: approve" in response.text
+    assert response.display is not None
+    assert response.display.kind == "gitlab_mr_review"
 
 
 def test_review_agent_reports_gitlab_connect_timeout() -> None:

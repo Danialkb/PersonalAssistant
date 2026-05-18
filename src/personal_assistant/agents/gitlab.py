@@ -1,3 +1,4 @@
+import asyncio
 import re
 from enum import StrEnum
 from typing import Any, Literal, Protocol
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from personal_assistant.agents.base import (
+    AgentDisplay,
     AgentResponse,
     ConfirmCallback,
     TextStreamCallback,
@@ -84,6 +86,9 @@ class PydanticAIMRReviewer:
     def review(self, prompt: str) -> MRReviewResult:
         return self._agent.run_sync(prompt).output
 
+    async def review_async(self, prompt: str) -> MRReviewResult:
+        return (await self._agent.run(prompt)).output
+
 
 class MRReviewPromptBuilder:
     def __init__(
@@ -92,17 +97,22 @@ class MRReviewPromptBuilder:
         self._max_diff_chars = max_diff_chars
         self._max_file_diff_chars = max_file_diff_chars
 
-    def build(self, context: GitLabMRReviewContext) -> str:
+    def build(self, context: GitLabMRReviewContext, *, user_prompt: str = "") -> str:
         mr = context.merge_request
         author = mr.author.username if mr.author else "unknown"
         lines = [
             "Review this GitLab merge request.",
+            "",
+            "User request:",
+            user_prompt or "[not provided]",
             "",
             "Review policy:",
             "- Focus on meaningful engineering feedback.",
             "- Prefer fewer, higher-quality comments over many minor comments.",
             "- Do not comment on style preferences unless they hide real maintainability risk.",
             "- Include tests feedback only for meaningful behavior or risk.",
+            "- Write summary, risk assessment, comments, reasons, and suggested changes in the same language as the user request.",
+            "- Keep enum values unchanged.",
             "- Return the requested structured result.",
             "",
             "Project:",
@@ -181,15 +191,31 @@ class GitLabMRReviewAgent:
         return cls(GitLabMRService.from_settings(settings), model=model)
 
     def review_merge_request(
-        self, project: int | str, merge_request_iid: int
+        self, project: int | str, merge_request_iid: int, *, user_prompt: str = ""
     ) -> MRReviewResult:
         if self._reviewer is None:
             raise ValueError(
                 "OPENAI_API_KEY is required to review GitLab merge requests"
             )
         context = self._load_review_context(project, merge_request_iid)
-        prompt = self._prompt_builder.build(context)
+        prompt = self._prompt_builder.build(context, user_prompt=user_prompt)
         return self._reviewer.review(prompt)
+
+    async def review_merge_request_async(
+        self, project: int | str, merge_request_iid: int, *, user_prompt: str = ""
+    ) -> MRReviewResult:
+        if self._reviewer is None:
+            raise ValueError(
+                "OPENAI_API_KEY is required to review GitLab merge requests"
+            )
+        context = await asyncio.to_thread(
+            self._load_review_context, project, merge_request_iid
+        )
+        prompt = self._prompt_builder.build(context, user_prompt=user_prompt)
+        review_async = getattr(self._reviewer, "review_async", None)
+        if review_async is not None:
+            return await review_async(prompt)
+        return await asyncio.to_thread(self._reviewer.review, prompt)
 
     def _load_review_context(
         self, project: int | str, merge_request_iid: int
@@ -243,9 +269,9 @@ class GitLabMRReviewAgent:
         if command.action != "review" or not command.can_review:
             return AgentResponse(command.message)
         result = self.review_merge_request(
-            command.project or "", command.merge_request_iid or 0
+            command.project or "", command.merge_request_iid or 0, user_prompt=text
         )
-        return AgentResponse(format_mr_review_result(result))
+        return _review_response(result)
 
     async def handle_prompt_stream(
         self,
@@ -255,7 +281,13 @@ class GitLabMRReviewAgent:
         confirm: ConfirmCallback | None = None,
         on_text_delta: TextStreamCallback | None = None,
     ) -> AgentResponse:
-        return self.handle_prompt(text, context=context, confirm=confirm)
+        command = self.plan_command(text, context=context)
+        if command.action != "review" or not command.can_review:
+            return AgentResponse(command.message)
+        result = await self.review_merge_request_async(
+            command.project or "", command.merge_request_iid or 0, user_prompt=text
+        )
+        return _review_response(result)
 
     def context_summary(self) -> str:
         return ""
@@ -285,6 +317,13 @@ def format_mr_review_result(result: MRReviewResult) -> str:
         if comment.suggested_change:
             lines.append(f"  Suggested change: {comment.suggested_change}")
     return "\n".join(lines)
+
+
+def _review_response(result: MRReviewResult) -> AgentResponse:
+    return AgentResponse(
+        format_mr_review_result(result),
+        display=AgentDisplay(kind="gitlab_mr_review", payload=result),
+    )
 
 
 def parse_gitlab_mr_reference(text: str) -> tuple[str, int] | None:

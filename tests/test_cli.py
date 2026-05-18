@@ -2,13 +2,20 @@ import asyncio
 from typing import Any
 
 import httpx
+from rich.console import Console
 
-from personal_assistant.agents.base import AgentResponse, ConfirmCallback
+from personal_assistant.agents.base import AgentDisplay, AgentResponse, ConfirmCallback
+from personal_assistant.agents.gitlab import (
+    MRReviewResult,
+    ReviewRecommendation,
+    ReviewSeverity,
+)
 from personal_assistant.agents.jira import JiraAgent, JiraCommand
 from personal_assistant.assistant import AssistantAgent
 from personal_assistant.clients.jira import JiraIssue, JiraTransition
 from personal_assistant.cli import ChatSession, main
 from personal_assistant.settings import Settings
+from personal_assistant.ui import TerminalUI
 
 
 class StubAgent(JiraAgent):
@@ -501,6 +508,38 @@ def test_print_handled_prints_final_text_when_stream_has_no_chunks(capsys) -> No
 
     output = capsys.readouterr().out
     assert "готово" in output
+
+
+def test_terminal_ui_prints_gitlab_mr_review_as_structured_panel() -> None:
+    console = Console(record=True, width=120, color_system=None)
+    ui = TerminalUI(console=console)
+    result = MRReviewResult(
+        summary="MR в целом выглядит удачно.",
+        risk_assessment="Средний риск по доступу к данным.",
+        comments=[
+            {
+                "severity": ReviewSeverity.IMPORTANT,
+                "file_path": "src/apps/external_users/api/urls/internal.py",
+                "line": 16,
+                "message": "Проверьте фильтрацию по текущему external_user.",
+                "reason": "List endpoint может случайно вернуть чужие загрузки.",
+                "suggested_change": "Добавьте тест на изоляцию загрузок.",
+            }
+        ],
+        recommendation=ReviewRecommendation.APPROVE_WITH_SUGGESTIONS,
+    )
+
+    ui.print_display(AgentDisplay(kind="gitlab_mr_review", payload=result))
+
+    output = console.export_text()
+    assert "GitLab MR Review" in output
+    assert "Summary" in output
+    assert "Recommendation" in output
+    assert "approve_with_suggestions" in output
+    assert "#1 important" in output
+    assert "Where" in output
+    assert "src/apps/external_users/api/urls/internal.py:16" in output
+    assert "Suggested" in output
 
 
 def test_print_handled_catches_http_request_errors(capsys) -> None:

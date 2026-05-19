@@ -133,6 +133,32 @@ def get_jira_transitions(settings: Settings, *, issue_key: str) -> list[JiraTran
     return JiraClient(settings).get_transitions(issue_key)
 
 
+def find_jira_transition(
+    transitions: list[JiraTransition], requested: str
+) -> JiraTransition | None:
+    normalized = requested.strip().lower()
+    for transition in transitions:
+        if (
+            transition.name.lower() == normalized
+            or (transition.target_status or "").lower() == normalized
+        ):
+            return transition
+    partial_matches = [
+        transition
+        for transition in transitions
+        if normalized
+        and (
+            normalized in transition.name.lower()
+            or normalized in (transition.target_status or "").lower()
+            or transition.name.lower() in normalized
+            or (transition.target_status or "").lower() in normalized
+        )
+    ]
+    if len(partial_matches) == 1:
+        return partial_matches[0]
+    return None
+
+
 def transition_jira_issue(
     settings: Settings, *, issue_key: str, transition_name: str
 ) -> str:

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import atexit
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +12,73 @@ from personal_assistant.agents.base import AgentDisplay, AgentResponse
 from personal_assistant.assistant import AssistantAgent
 from personal_assistant.settings import get_settings
 from personal_assistant.ui import TerminalUI
+
+_READLINE_CONFIGURED = False
+_READLINE_MANUAL_HISTORY = False
+
+
+def _configure_readline(history_file: Path | None = None) -> None:
+    """Enable line editing and prompt history for interactive chat input.
+
+    Some Python builds do not initialize readline for scripts unless it is imported
+    explicitly. Without it, arrow keys can be passed through as escape sequences
+    instead of moving the cursor or browsing history.
+    """
+    global _READLINE_CONFIGURED, _READLINE_MANUAL_HISTORY
+    if _READLINE_CONFIGURED:
+        return
+    _READLINE_CONFIGURED = True
+
+    try:
+        import readline
+    except ImportError:
+        return
+
+    history_path = history_file or Path.home() / ".personal_assistant_history"
+
+    try:
+        readline.set_history_length(1000)
+    except Exception:
+        pass
+
+    try:
+        readline.set_auto_history(False)
+        _READLINE_MANUAL_HISTORY = True
+    except Exception:
+        # input() already records lines when readline auto-history cannot be
+        # disabled. Adding them manually too would duplicate every prompt.
+        _READLINE_MANUAL_HISTORY = False
+
+    try:
+        if history_path.exists():
+            readline.read_history_file(str(history_path))
+    except Exception:
+        pass
+
+    def write_history() -> None:
+        try:
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            readline.write_history_file(str(history_path))
+        except Exception:
+            pass
+
+    atexit.register(write_history)
+
+
+def _remember_prompt_in_readline_history(prompt: str) -> None:
+    if not _READLINE_MANUAL_HISTORY:
+        return
+
+    try:
+        import readline
+    except ImportError:
+        return
+
+    if prompt:
+        try:
+            readline.add_history(prompt)
+        except Exception:
+            pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +107,7 @@ class ChatSession:
         self._last_display: AgentDisplay | None = None
 
     def run(self, initial_prompt: str | None = None) -> None:
+        _configure_readline()
         self._ui.print_banner()
         if initial_prompt:
             self.print_handled(initial_prompt)
@@ -57,6 +126,7 @@ class ChatSession:
                 self._recent_turns.clear()
                 self._ui.print_success("Контекст очищен.")
                 continue
+            _remember_prompt_in_readline_history(prompt)
             self.print_handled(prompt)
 
     def handle(self, prompt: str) -> str:

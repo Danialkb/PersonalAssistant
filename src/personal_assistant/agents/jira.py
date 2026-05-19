@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 from typing import Any, Literal
 
@@ -6,6 +7,7 @@ from pydantic_ai import Agent, RunContext
 
 from personal_assistant.agents.base import (
     AgentDisplay,
+    AgentModel,
     AgentResponse,
     ConfirmCallback,
     TextStreamCallback,
@@ -18,6 +20,7 @@ from personal_assistant.tools.jira import (
     create_jira_issue,
     format_jira_issue,
     format_jira_issues,
+    find_jira_transition,
     format_jira_transitions,
     get_jira_issue as fetch_jira_issue,
     get_jira_tasks as fetch_jira_tasks,
@@ -118,7 +121,7 @@ def get_jira_transitions(ctx: RunContext[Settings], issue_key: str) -> str:
 class JiraAgent:
     name = "jira"
 
-    def __init__(self, settings: Settings, *, model: Any | None = None) -> None:
+    def __init__(self, settings: Settings, *, model: AgentModel | None = None) -> None:
         self._settings = settings
         self._agent: Agent[Settings, str] | None = None
         self._planner: Agent[None, JiraCommand] | None = None
@@ -177,7 +180,7 @@ class JiraAgent:
         confirm: ConfirmCallback | None = None,
         on_text_delta: TextStreamCallback | None = None,
     ) -> AgentResponse:
-        command = self.plan_command(text, context=context)
+        command = await self._plan_command_async(text, context=context)
         if command.action == "answer" and not command.message and self._agent:
             return await self._stream_text_answer(text, on_text_delta=on_text_delta)
         return self.execute_command(
@@ -185,6 +188,11 @@ class JiraAgent:
             fallback_prompt=text,
             confirm=confirm or (lambda preview: False),
         )
+
+    async def _plan_command_async(self, text: str, *, context: str = "") -> JiraCommand:
+        if not self._planner:
+            return self._plan_locally(text)
+        return await asyncio.to_thread(self.plan_command, text, context=context)
 
     def execute_command(
         self,
@@ -302,7 +310,7 @@ class JiraAgent:
             return "Не указан целевой статус или transition."
 
         transitions = fetch_jira_transitions(self._settings, issue_key=issue_key)
-        transition = self._find_transition(transitions, command.transition)
+        transition = find_jira_transition(transitions, command.transition)
         if not transition:
             return self._format_unknown_transition(
                 issue_key, command.transition, transitions
@@ -354,32 +362,6 @@ class JiraAgent:
         if transition.target_status and transition.target_status != transition.name:
             return f"Изменить статус {issue_key}: {transition.name} -> {transition.target_status}"
         return f"Изменить статус {issue_key}: {transition.name}"
-
-    @staticmethod
-    def _find_transition(
-        transitions: list[JiraTransition], requested: str
-    ) -> JiraTransition | None:
-        normalized = requested.strip().lower()
-        for transition in transitions:
-            if (
-                transition.name.lower() == normalized
-                or (transition.target_status or "").lower() == normalized
-            ):
-                return transition
-        partial_matches = [
-            transition
-            for transition in transitions
-            if normalized
-            and (
-                normalized in transition.name.lower()
-                or normalized in (transition.target_status or "").lower()
-                or transition.name.lower() in normalized
-                or (transition.target_status or "").lower() in normalized
-            )
-        ]
-        if len(partial_matches) == 1:
-            return partial_matches[0]
-        return None
 
     @staticmethod
     def _format_unknown_transition(

@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import BaseModel
+from pydantic_ai.models import KnownModelName, Model
 
 
 ConfirmCallback = Callable[[str], bool]
 TextStreamCallback = Callable[[str], None]
+AgentModel = Model | KnownModelName | str
 
 
 @dataclass(frozen=True)

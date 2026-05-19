@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from typing import Any
 
 import httpx
@@ -339,7 +340,9 @@ def test_assistant_prompt_starts_interactive_session(monkeypatch, capsys) -> Non
     main()
 
     output = capsys.readouterr().out
-    assert "Assistant chat. /exit чтобы выйти, /clear чтобы очистить контекст." in output
+    assert (
+        "Assistant chat. /exit чтобы выйти, /clear чтобы очистить контекст." in output
+    )
     assert "ответ: привет" in output
 
 
@@ -373,7 +376,9 @@ def test_chat_session_search_stores_context_and_resolves_first_issue(
         settings,
         confirm=lambda preview: True,
     )
-    monkeypatch.setattr("personal_assistant.agents.jira.search_jira_issues", fake_search)
+    monkeypatch.setattr(
+        "personal_assistant.agents.jira.search_jira_issues", fake_search
+    )
 
     output = session.handle("покажи задачи")
 
@@ -585,6 +590,11 @@ def test_jira_agent_streams_text_answer_with_deltas() -> None:
     class FakePlanner:
         def run_sync(self, prompt: str):
             captured["planner_prompt"] = prompt
+            try:
+                asyncio.get_running_loop()
+                captured["planner_loop_running"] = True
+            except RuntimeError:
+                captured["planner_loop_running"] = False
 
             class Result:
                 output = JiraCommand(action="answer")
@@ -620,6 +630,7 @@ def test_jira_agent_streams_text_answer_with_deltas() -> None:
 
     assert response.text == "привет"
     assert chunks == ["при", "вет"]
+    assert captured["planner_loop_running"] is False
     assert captured["text"] == "скажи привет"
     assert captured["deps"] is settings
     assert captured["delta"] is True
@@ -756,3 +767,99 @@ def test_chat_session_keeps_explicit_child_issue_type(monkeypatch) -> None:
     session.handle("создай подзадачу внутри истории 1914")
 
     assert captured["issue_type"] == "Sub-task"
+
+
+class FakeReadline:
+    def __init__(self) -> None:
+        self.history_length = None
+        self.auto_history: bool | None = None
+        self.read_paths: list[str] = []
+        self.write_paths: list[str] = []
+        self.added: list[str] = []
+
+    def set_history_length(self, length: int) -> None:
+        self.history_length = length
+
+    def set_auto_history(self, enabled: bool) -> None:
+        self.auto_history = enabled
+
+    def read_history_file(self, path: str) -> None:
+        self.read_paths.append(path)
+
+    def write_history_file(self, path: str) -> None:
+        self.write_paths.append(path)
+
+    def add_history(self, prompt: str) -> None:
+        self.added.append(prompt)
+
+
+def test_chat_session_configures_readline_history(monkeypatch, tmp_path) -> None:
+    from personal_assistant import cli
+
+    fake_readline = FakeReadline()
+    callbacks = []
+    history_file = tmp_path / "history"
+    history_file.write_text("старый запрос\n")
+
+    monkeypatch.setitem(sys.modules, "readline", fake_readline)
+    monkeypatch.setattr(cli, "_READLINE_CONFIGURED", False)
+    monkeypatch.setattr(
+        cli.atexit, "register", lambda callback: callbacks.append(callback)
+    )
+
+    cli._configure_readline(history_file)
+    cli._remember_prompt_in_readline_history("новый запрос")
+    callbacks[0]()
+
+    assert fake_readline.history_length == 1000
+    assert fake_readline.auto_history is False
+    assert fake_readline.read_paths == [str(history_file)]
+    assert fake_readline.added == ["новый запрос"]
+    assert fake_readline.write_paths == [str(history_file)]
+
+
+def test_chat_session_does_not_duplicate_readline_auto_history(
+    monkeypatch, tmp_path
+) -> None:
+    from personal_assistant import cli
+
+    class AutoHistoryOnlyReadline(FakeReadline):
+        def set_auto_history(self, enabled: bool) -> None:
+            raise AttributeError("set_auto_history is unavailable")
+
+    fake_readline = AutoHistoryOnlyReadline()
+
+    monkeypatch.setitem(sys.modules, "readline", fake_readline)
+    monkeypatch.setattr(cli, "_READLINE_CONFIGURED", False)
+    monkeypatch.setattr(cli, "_READLINE_MANUAL_HISTORY", False)
+    monkeypatch.setattr(cli.atexit, "register", lambda callback: None)
+
+    cli._configure_readline(tmp_path / "history")
+    cli._remember_prompt_in_readline_history("новый запрос")
+
+    assert fake_readline.added == []
+
+
+def test_chat_session_enables_readline_before_first_prompt(monkeypatch, capsys) -> None:
+    from personal_assistant import cli
+
+    class AnswerAssistant(StubAssistant):
+        pass
+
+    configured = []
+    inputs = iter(["/exit"])
+    monkeypatch.setattr(cli, "_configure_readline", lambda: configured.append(True))
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    session = ChatSession(
+        AnswerAssistant(
+            Settings(
+                JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"
+            )
+        ),
+        Settings(JIRA_BASE_URL="https://example.atlassian.net", JIRA_API_KEY="token"),
+    )
+
+    session.run()
+
+    assert configured == [True]

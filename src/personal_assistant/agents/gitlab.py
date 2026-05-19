@@ -1,7 +1,7 @@
 import asyncio
 import re
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 from urllib.parse import unquote, urlparse
 
 import httpx
@@ -10,11 +10,16 @@ from pydantic_ai import Agent
 
 from personal_assistant.agents.base import (
     AgentDisplay,
+    AgentModel,
     AgentResponse,
     ConfirmCallback,
     TextStreamCallback,
 )
 from personal_assistant.services.gitlab_mr import GitLabMRReviewContext, GitLabMRService
+from personal_assistant.services.jira_code_review import (
+    JiraCodeReviewUpdateResult,
+    JiraCodeReviewUpdater,
+)
 from personal_assistant.settings import Settings
 
 
@@ -62,6 +67,12 @@ class MRReviewer(Protocol):
     def review(self, prompt: str) -> MRReviewResult: ...
 
 
+class MRJiraUpdater(Protocol):
+    def update_from_texts(
+        self, texts: list[str], *, confirm: ConfirmCallback
+    ) -> JiraCodeReviewUpdateResult: ...
+
+
 REVIEWER_INSTRUCTIONS = (
     "You are a GitLab Merge Request reviewer. Return only structured output. "
     "Review the MR as a whole before commenting. Be concise, practical, and respectful. "
@@ -76,7 +87,7 @@ REVIEWER_INSTRUCTIONS = (
 
 
 class PydanticAIMRReviewer:
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: AgentModel) -> None:
         self._agent = Agent(
             model,
             output_type=MRReviewResult,
@@ -176,41 +187,59 @@ class GitLabMRReviewAgent:
         *,
         prompt_builder: MRReviewPromptBuilder | None = None,
         reviewer: MRReviewer | None = None,
-        model: Any | None = None,
+        jira_updater: MRJiraUpdater | None = None,
+        model: AgentModel | None = None,
     ) -> None:
         self._service = service
         self._prompt_builder = prompt_builder or MRReviewPromptBuilder()
         self._reviewer = reviewer or (
             PydanticAIMRReviewer(model) if model is not None else None
         )
+        self._jira_updater = jira_updater
 
     @classmethod
     def from_settings(
-        cls, settings: Settings, *, model: Any | None = None
+        cls, settings: Settings, *, model: AgentModel | None = None
     ) -> "GitLabMRReviewAgent":
-        return cls(GitLabMRService.from_settings(settings), model=model)
+        return cls(
+            GitLabMRService.from_settings(settings),
+            jira_updater=JiraCodeReviewUpdater(settings),
+            model=model,
+        )
 
     def review_merge_request(
         self, project: int | str, merge_request_iid: int, *, user_prompt: str = ""
     ) -> MRReviewResult:
-        if self._reviewer is None:
-            raise ValueError(
-                "OPENAI_API_KEY is required to review GitLab merge requests"
-            )
+        self._ensure_reviewer()
         context = self._load_review_context(project, merge_request_iid)
-        prompt = self._prompt_builder.build(context, user_prompt=user_prompt)
-        return self._reviewer.review(prompt)
+        return self._review_loaded_context(context, user_prompt=user_prompt)
 
     async def review_merge_request_async(
         self, project: int | str, merge_request_iid: int, *, user_prompt: str = ""
     ) -> MRReviewResult:
+        self._ensure_reviewer()
+        context = await asyncio.to_thread(
+            self._load_review_context, project, merge_request_iid
+        )
+        return await self._review_loaded_context_async(context, user_prompt=user_prompt)
+
+    def _ensure_reviewer(self) -> None:
         if self._reviewer is None:
             raise ValueError(
                 "OPENAI_API_KEY is required to review GitLab merge requests"
             )
-        context = await asyncio.to_thread(
-            self._load_review_context, project, merge_request_iid
-        )
+
+    def _review_loaded_context(
+        self, context: GitLabMRReviewContext, *, user_prompt: str = ""
+    ) -> MRReviewResult:
+        self._ensure_reviewer()
+        prompt = self._prompt_builder.build(context, user_prompt=user_prompt)
+        return self._reviewer.review(prompt)
+
+    async def _review_loaded_context_async(
+        self, context: GitLabMRReviewContext, *, user_prompt: str = ""
+    ) -> MRReviewResult:
+        self._ensure_reviewer()
         prompt = self._prompt_builder.build(context, user_prompt=user_prompt)
         review_async = getattr(self._reviewer, "review_async", None)
         if review_async is not None:
@@ -236,7 +265,9 @@ class GitLabMRReviewAgent:
             ) from exc
         except httpx.RequestError as exc:
             host = _request_host(exc)
-            raise ValueError(f"Не удалось загрузить GitLab MR context{host}: {exc}") from exc
+            raise ValueError(
+                f"Не удалось загрузить GitLab MR context{host}: {exc}"
+            ) from exc
 
     def handle_text(self, text: str) -> str:
         return self.handle_prompt(text).text
@@ -268,10 +299,15 @@ class GitLabMRReviewAgent:
         command = self.plan_command(text, context=context)
         if command.action != "review" or not command.can_review:
             return AgentResponse(command.message)
-        result = self.review_merge_request(
-            command.project or "", command.merge_request_iid or 0, user_prompt=text
+        self._ensure_reviewer()
+        review_context = self._load_review_context(
+            command.project or "", command.merge_request_iid or 0
         )
-        return _review_response(result)
+        jira_message = self._update_jira_before_review(
+            review_context, user_prompt=text, confirm=confirm
+        )
+        result = self._review_loaded_context(review_context, user_prompt=text)
+        return _review_response(result, jira_message=jira_message)
 
     async def handle_prompt_stream(
         self,
@@ -284,10 +320,38 @@ class GitLabMRReviewAgent:
         command = self.plan_command(text, context=context)
         if command.action != "review" or not command.can_review:
             return AgentResponse(command.message)
-        result = await self.review_merge_request_async(
-            command.project or "", command.merge_request_iid or 0, user_prompt=text
+        self._ensure_reviewer()
+        review_context = await asyncio.to_thread(
+            self._load_review_context,
+            command.project or "",
+            command.merge_request_iid or 0,
         )
-        return _review_response(result)
+        jira_message = self._update_jira_before_review(
+            review_context, user_prompt=text, confirm=confirm
+        )
+        result = await self._review_loaded_context_async(
+            review_context, user_prompt=text
+        )
+        return _review_response(result, jira_message=jira_message)
+
+    def _update_jira_before_review(
+        self,
+        context: GitLabMRReviewContext,
+        *,
+        user_prompt: str,
+        confirm: ConfirmCallback | None,
+    ) -> str | None:
+        if self._jira_updater is None:
+            return None
+        update = self._jira_updater.update_from_texts(
+            [
+                user_prompt,
+                context.merge_request.title,
+                context.merge_request.source_branch,
+            ],
+            confirm=confirm or (lambda preview: False),
+        )
+        return update.message
 
     def context_summary(self) -> str:
         return ""
@@ -319,9 +383,14 @@ def format_mr_review_result(result: MRReviewResult) -> str:
     return "\n".join(lines)
 
 
-def _review_response(result: MRReviewResult) -> AgentResponse:
+def _review_response(
+    result: MRReviewResult, *, jira_message: str | None = None
+) -> AgentResponse:
+    text = format_mr_review_result(result)
+    if jira_message:
+        text = f"{jira_message}\n\n{text}"
     return AgentResponse(
-        format_mr_review_result(result),
+        text,
         display=AgentDisplay(kind="gitlab_mr_review", payload=result),
     )
 
